@@ -13,7 +13,6 @@ source "$SCRIPT_DIR/readme_parser.sh"
 run_user_auditing() {
     log_info "Starting User Auditing module..."
 
-    # Ensure README is parsed
     if [[ $README_PARSED -eq 0 ]]; then
         log_warn "README not parsed, parsing now..."
         parse_readme || {
@@ -22,17 +21,8 @@ run_user_auditing() {
         }
     fi
 
-    # TODO: Implementation
-    # 1. Get list of all system users (UID >= 1000)
-    # 2. Compare against authorized users from README
-    # 3. Identify unauthorized users
-    # 4. Check for terminated users that still have accounts
-    # 5. Create missing authorized users
-    # 6. Verify admin privileges match README
-
     log_info "Auditing system users..."
 
-    # Example: List current users
     log_debug "Current system users (UID >= 1000):"
     awk -F: '$3 >= 1000 && $1 != "nobody" {print $1}' /etc/passwd | while read -r user; do
         log_debug "  - $user"

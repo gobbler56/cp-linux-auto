@@ -12,18 +12,6 @@ source "$SCRIPT_DIR/../lib/utils.sh"
 run_application_security() {
     log_info "Starting Application Security module..."
 
-    # TODO: Implementation
-    # 1. Secure SSH configuration (/etc/ssh/sshd_config):
-    #    - Disable root login
-    #    - Disable password authentication (if keys are set up)
-    #    - Change default port
-    #    - Enable strict mode
-    # 2. Secure web server configs (Apache/Nginx)
-    # 3. Secure database configs (MySQL/PostgreSQL)
-    # 4. Configure firewall rules (UFW)
-    # 5. Secure FTP/SFTP if installed
-    # 6. Review application-specific security settings
-
     log_info "Checking SSH configuration..."
     if [[ -f /etc/ssh/sshd_config ]]; then
         log_debug "PermitRootLogin: $(grep '^PermitRootLogin' /etc/ssh/sshd_config | awk '{print $2}')"

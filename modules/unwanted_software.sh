@@ -12,20 +12,8 @@ source "$SCRIPT_DIR/../lib/utils.sh"
 run_unwanted_software() {
     log_info "Starting Unwanted Software module..."
 
-    # TODO: Implementation
-    # 1. List all installed packages
-    # 2. Check for common unwanted software:
-    #    - Hacking tools (nmap, nikto, john, hydra, metasploit, etc.)
-    #    - P2P software (transmission, deluge, etc.)
-    #    - Games (unless allowed by README)
-    #    - Remote access tools (vnc, teamviewer unless authorized)
-    # 3. Cross-reference with README if it specifies allowed software
-    # 4. Generate removal recommendations
-    # 5. Optionally remove packages
-
     log_info "Scanning installed packages..."
 
-    # Common unwanted packages in CyberPatriot
     local unwanted_packages=(
         "john"
         "hydra"

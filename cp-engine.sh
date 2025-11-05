@@ -169,28 +169,41 @@ run_all_modules() {
 interactive_mode() {
     log_section "Interactive Mode"
 
-    echo "Available modules:"
-    local i=1
-    for module in "${MODULES[@]}"; do
-        echo "  $i) $module"
-        ((i++))
+    while true; do
+        echo
+        echo "Available modules:"
+        local i=1
+        for module in "${MODULES[@]}"; do
+            echo "  $i) $module"
+            ((i++))
+        done
+        echo "  a) Run all modules"
+        echo "  q) Quit"
+        echo
+
+        read -p "Select module to run: " choice
+
+        if [[ "$choice" == "q" ]]; then
+            log_info "Exiting interactive mode"
+            exit 0
+        elif [[ "$choice" == "a" ]]; then
+            run_all_modules
+            break
+        elif [[ "$choice" =~ ^[0-9]+$ ]] && [[ $choice -ge 1 ]] && [[ $choice -le ${#MODULES[@]} ]]; then
+            local selected_module="${MODULES[$((choice-1))]}"
+            run_module "$selected_module"
+
+            echo
+            read -p "Run another module? (y/n): " -n 1 -r
+            echo
+            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                log_info "Exiting interactive mode"
+                exit 0
+            fi
+        else
+            log_error "Invalid selection"
+        fi
     done
-    echo "  a) Run all modules"
-    echo "  q) Quit"
-    echo
-
-    read -p "Select module to run: " choice
-
-    if [[ "$choice" == "q" ]]; then
-        exit 0
-    elif [[ "$choice" == "a" ]]; then
-        run_all_modules
-    elif [[ "$choice" =~ ^[0-9]+$ ]] && [[ $choice -ge 1 ]] && [[ $choice -le ${#MODULES[@]} ]]; then
-        local selected_module="${MODULES[$((choice-1))]}"
-        run_module "$selected_module"
-    else
-        log_error "Invalid selection"
-    fi
 }
 
 # Show usage

@@ -12,14 +12,6 @@ source "$SCRIPT_DIR/../lib/utils.sh"
 run_os_updates() {
     log_info "Starting OS Updates module..."
 
-    # TODO: Implementation
-    # 1. Check kernel version
-    # 2. Check for kernel updates
-    # 3. Check for distribution upgrades
-    # 4. Install security patches
-    # 5. Configure automatic security updates
-    # 6. Check for pending system restarts
-
     log_info "Current kernel version:"
     uname -r | log_debug
 
