@@ -7,39 +7,215 @@ source "$SCRIPT_DIR/../lib/utils.sh"
 
 # Module: Defensive Countermeasures
 # Category: Defensive Countermeasures
-# Description: Sets up defensive security tools and monitoring
+# Description: Sets up defensive security tools and monitoring including UFW firewall
+
+readonly UFW_CONF="/etc/ufw/ufw.conf"
+readonly UFW_DEFAULT="/etc/default/ufw"
+readonly UFW_SYSCTL="/etc/ufw/sysctl.conf"
+
+# Ensure UFW is installed
+ensure_ufw_installed() {
+    log_section "Ensuring UFW is Installed"
+
+    if command_exists ufw; then
+        log_success "UFW is already installed"
+        return 0
+    fi
+
+    log_info "UFW not found, installing..."
+    if apt-get install -y ufw >/dev/null 2>&1; then
+        log_success "UFW installed successfully"
+        return 0
+    else
+        log_error "Failed to install UFW"
+        return 1
+    fi
+}
+
+# Configure UFW defaults
+configure_ufw_defaults() {
+    log_section "Configuring UFW Default Policies"
+
+    # Set default policies: deny incoming, allow outgoing, deny routed
+    log_info "Setting default policy: deny incoming"
+    ufw default deny incoming >/dev/null 2>&1
+
+    log_info "Setting default policy: allow outgoing"
+    ufw default allow outgoing >/dev/null 2>&1
+
+    log_info "Setting default policy: deny routed"
+    ufw default deny routed >/dev/null 2>&1
+
+    log_success "UFW default policies configured"
+    return 0
+}
+
+# Configure loopback rules (CIS control)
+configure_loopback() {
+    log_section "Configuring Loopback Rules"
+
+    # Allow all traffic on loopback interface
+    log_info "Allowing traffic on loopback interface (lo)"
+    ufw allow in on lo >/dev/null 2>&1
+    ufw allow out on lo >/dev/null 2>&1
+
+    # Deny all traffic from loopback network interface (IPv4)
+    log_info "Denying traffic from 127.0.0.0/8 not on loopback"
+    ufw deny in from 127.0.0.0/8 >/dev/null 2>&1
+
+    # Deny all traffic from loopback network interface (IPv6)
+    log_info "Denying traffic from ::1 not on loopback"
+    ufw deny in from ::1 >/dev/null 2>&1
+
+    log_success "Loopback rules configured"
+    return 0
+}
+
+# Configure SSH rate limiting
+configure_ssh_rate_limit() {
+    log_section "Configuring SSH Rate Limiting"
+
+    # First, remove any existing SSH rules to avoid conflicts
+    ufw --force delete allow 22/tcp >/dev/null 2>&1
+    ufw --force delete allow ssh >/dev/null 2>&1
+
+    # Rate limit SSH connections to prevent brute-force attacks
+    log_info "Enabling SSH rate limiting on port 22/tcp"
+    ufw limit 22/tcp >/dev/null 2>&1
+
+    log_success "SSH rate limiting configured"
+    return 0
+}
+
+# Enable UFW logging
+enable_ufw_logging() {
+    log_section "Enabling UFW Logging"
+
+    # Set logging to high level for better visibility
+    log_info "Setting UFW logging level to high"
+    ufw logging high >/dev/null 2>&1
+
+    log_success "UFW logging enabled at high level"
+    return 0
+}
+
+# Ensure IPv6 is properly configured in UFW
+configure_ipv6_parity() {
+    log_section "Configuring IPv6 Parity"
+
+    # Check if IPv6 is enabled on the system
+    local ipv6_enabled=0
+    if [[ -f /proc/net/if_inet6 ]] && [[ -s /proc/net/if_inet6 ]]; then
+        ipv6_enabled=1
+        log_info "IPv6 is enabled on this system"
+    else
+        log_info "IPv6 is not enabled on this system"
+    fi
+
+    # Ensure UFW is configured to handle IPv6
+    if [[ -f "$UFW_DEFAULT" ]]; then
+        if grep -q "^IPV6=yes" "$UFW_DEFAULT"; then
+            log_success "UFW IPv6 support is enabled"
+        else
+            log_info "Enabling UFW IPv6 support"
+            sed -i 's/^IPV6=.*/IPV6=yes/' "$UFW_DEFAULT" 2>/dev/null || \
+                echo "IPV6=yes" >> "$UFW_DEFAULT"
+            log_success "UFW IPv6 support enabled"
+        fi
+    fi
+
+    return 0
+}
+
+# Enable and start UFW
+enable_ufw() {
+    log_section "Enabling UFW Firewall"
+
+    # Enable UFW (will auto-start on boot)
+    log_info "Enabling UFW and setting to start at boot"
+    echo "y" | ufw enable >/dev/null 2>&1
+
+    # Ensure UFW service is enabled at boot
+    if command_exists systemctl; then
+        systemctl enable ufw >/dev/null 2>&1
+        log_success "UFW enabled and set to start at boot"
+    else
+        log_success "UFW enabled"
+    fi
+
+    return 0
+}
+
+# Verify UFW configuration
+verify_ufw_status() {
+    log_section "Verifying UFW Configuration"
+
+    # Get verbose status
+    log_info "Current UFW status:"
+    local status_output=$(ufw status verbose 2>/dev/null)
+
+    if echo "$status_output" | grep -q "Status: active"; then
+        log_success "UFW is active"
+    else
+        log_warn "UFW may not be active"
+    fi
+
+    # Check default policies
+    if echo "$status_output" | grep -q "deny (incoming)"; then
+        log_success "Default incoming: deny"
+    else
+        log_warn "Default incoming policy may not be set to deny"
+    fi
+
+    if echo "$status_output" | grep -q "allow (outgoing)"; then
+        log_success "Default outgoing: allow"
+    else
+        log_warn "Default outgoing policy may not be set to allow"
+    fi
+
+    if echo "$status_output" | grep -q "deny (routed)" || echo "$status_output" | grep -q "disabled (routed)"; then
+        log_success "Default routed: deny/disabled"
+    else
+        log_warn "Default routed policy may not be set to deny"
+    fi
+
+    # Check logging
+    if echo "$status_output" | grep -qi "logging.*high"; then
+        log_success "Logging: high"
+    elif echo "$status_output" | grep -qi "logging.*on"; then
+        log_info "Logging is enabled"
+    else
+        log_warn "Logging may not be enabled"
+    fi
+
+    # Display rules
+    log_info "Active UFW rules:"
+    ufw status numbered 2>/dev/null | grep -v "^Status:" | while read -r line; do
+        [[ -n "$line" ]] && log_info "  $line"
+    done
+
+    return 0
+}
 
 run_defensive_countermeasures() {
     log_info "Starting Defensive Countermeasures module..."
 
-    log_info "Checking firewall status..."
-    if command_exists ufw; then
-        local ufw_status=$(ufw status 2>/dev/null | head -1)
-        log_info "UFW: $ufw_status"
-    else
-        log_warn "UFW not installed"
+    # Ensure UFW is installed
+    if ! ensure_ufw_installed; then
+        log_error "Cannot proceed without UFW installed"
+        return 1
     fi
 
-    log_info "Checking fail2ban status..."
-    if command_exists fail2ban-client; then
-        if systemctl is-active --quiet fail2ban; then
-            log_success "fail2ban is active"
-        else
-            log_warn "fail2ban is installed but not active"
-        fi
-    else
-        log_warn "fail2ban not installed"
-    fi
+    # Configure UFW step by step
+    configure_ufw_defaults
+    configure_loopback
+    enable_ufw_logging
+    configure_ipv6_parity
+    configure_ssh_rate_limit
+    enable_ufw
+    verify_ufw_status
 
-    log_info "Checking auditd status..."
-    if systemctl is-active --quiet auditd; then
-        log_success "auditd is active"
-    else
-        log_warn "auditd is not active"
-    fi
-
-    log_warn "This module needs full implementation"
-
+    log_success "Defensive Countermeasures module completed"
     return 0
 }
 
