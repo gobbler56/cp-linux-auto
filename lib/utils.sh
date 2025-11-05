@@ -2,6 +2,10 @@
 # utils.sh - Utility functions for CyberPatriot Linux Engine
 # Provides logging, color output, and common helper functions
 
+# Prevent multiple sourcing
+[[ -n "${UTILS_SH_LOADED:-}" ]] && return 0
+readonly UTILS_SH_LOADED=1
+
 # Color codes for output
 readonly COLOR_RESET='\033[0m'
 readonly COLOR_RED='\033[0;31m'
