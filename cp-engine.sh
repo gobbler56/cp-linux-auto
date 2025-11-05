@@ -11,7 +11,30 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/utils.sh"
 source "$SCRIPT_DIR/lib/openrouter.sh"
 
-# Load configuration
+# Default settings
+SCORE_FILE="${SCORE_FILE:-/var/log/cyberpatriot/score.log}"
+BACKUP_DIR="${BACKUP_DIR:-/var/backups/cyberpatriot}"
+
+# All available modules (runs everything by default)
+MODULES=(
+    "dependencies"
+    "readme_parser"
+    "forensics_questions"
+    "user_auditing"
+    "account_policy"
+    "prohibited_files"
+    "malware"
+    "unwanted_software"
+    "application_security"
+    "application_updates"
+    "os_updates"
+    "service_auditing"
+    "local_policy"
+    "defensive_countermeasures"
+    "os_settings"
+)
+
+# Load configuration (only API key, model, and LOG_LEVEL)
 CONFIG_FILE="$SCRIPT_DIR/config.conf"
 if [[ -f "$CONFIG_FILE" ]]; then
     source "$CONFIG_FILE"
@@ -230,7 +253,7 @@ Examples:
   $0 -t                   # Test API connection
 
 Configuration:
-  Edit config.conf to configure API keys and module settings
+  Edit config.conf to set your OpenRouter API key, model, and log level
 EOF
 }
 
