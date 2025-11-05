@@ -18,6 +18,8 @@ Your task is to parse the README content and extract:
 3. Terminated users whose accounts should be removed
 4. Critical services that must remain running
 5. Group memberships for users
+6. Groups that need to be created
+7. System users that should have restricted login
 
 Return ONLY valid JSON in this exact format:
 {
@@ -28,7 +30,11 @@ Return ONLY valid JSON in this exact format:
     {"name": "username", "account_type": "admin|standard", "groups": ["group1"]}
   ],
   "terminated_users": ["username1", "username2"],
-  "critical_services": ["ssh", "apache2"]
+  "critical_services": ["ssh", "apache2"],
+  "groups_to_create": [
+    {"name": "groupname", "members": ["user1", "user2"]}
+  ],
+  "system_users_to_restrict": ["ftp", "guest", "mysql"]
 }
 
 Guidelines:
@@ -37,6 +43,11 @@ Guidelines:
 - Identify users explicitly marked as "terminated", "removed", or "former"
 - Service names should be actual service names (e.g., "ssh", "apache2", "mysql")
 - Account types: "admin" for administrators, "standard" for regular users
+- Extract any groups mentioned that should be created
+- Extract group memberships for all users
+- Identify system users (like "ftp", "guest") that should have login disabled
+- If "ftp" user is NOT explicitly mentioned as authorized, add it to system_users_to_restrict
+- If guest access is mentioned as disabled, add "guest" to system_users_to_restrict
 - If information is not present, use empty arrays []
 - Return ONLY the JSON object, no additional text or explanation'
 

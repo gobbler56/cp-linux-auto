@@ -247,8 +247,42 @@ is_user_terminated() {
     [[ $count -gt 0 ]]
 }
 
+# Get groups to create
+get_groups_to_create() {
+    if [[ $README_PARSED -eq 0 ]]; then
+        log_error "README not parsed yet. Call parse_readme first."
+        return 1
+    fi
+
+    echo "$README_DATA" | jq -r '.groups_to_create[]?'
+}
+
+# Get system users to restrict
+get_system_users_to_restrict() {
+    if [[ $README_PARSED -eq 0 ]]; then
+        log_error "README not parsed yet. Call parse_readme first."
+        return 1
+    fi
+
+    echo "$README_DATA" | jq -r '.system_users_to_restrict[]?'
+}
+
+# Get user groups for a specific user
+get_user_groups() {
+    local username="$1"
+
+    if [[ $README_PARSED -eq 0 ]]; then
+        log_error "README not parsed yet. Call parse_readme first."
+        return 1
+    fi
+
+    echo "$README_DATA" | jq -r --arg user "$username" \
+        '.all_users[] | select(.name == $user) | .groups[]?'
+}
+
 # Export functions
 export -f find_readme_html parse_readme display_readme_summary
 export -f get_authorized_users get_authorized_admins get_users_to_create
 export -f get_terminated_users get_critical_services
 export -f is_user_authorized is_user_admin is_user_terminated
+export -f get_groups_to_create get_system_users_to_restrict get_user_groups
