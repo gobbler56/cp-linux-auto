@@ -12,19 +12,6 @@ source "$SCRIPT_DIR/../lib/utils.sh"
 run_local_policy() {
     log_info "Starting Local Policy module..."
 
-    # TODO: Implementation
-    # 1. Configure sudo permissions (/etc/sudoers)
-    # 2. Set appropriate file permissions on sensitive files:
-    #    - /etc/shadow (640)
-    #    - /etc/passwd (644)
-    #    - /etc/group (644)
-    #    - /etc/ssh/sshd_config (600)
-    # 3. Configure audit logging (auditd)
-    # 4. Set up AppArmor/SELinux if available
-    # 5. Configure file system permissions
-    # 6. Set secure umask values
-    # 7. Disable USB storage if required
-
     log_info "Checking critical file permissions..."
 
     local critical_files=(

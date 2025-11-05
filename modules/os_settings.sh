@@ -12,21 +12,6 @@ source "$SCRIPT_DIR/../lib/utils.sh"
 run_os_settings() {
     log_info "Starting OS Settings module..."
 
-    # TODO: Implementation
-    # 1. Disable IPv6 if not needed
-    # 2. Configure kernel parameters (sysctl):
-    #    - IP forwarding
-    #    - SYN cookies
-    #    - ICMP redirects
-    #    - Source routing
-    # 3. Disable unnecessary kernel modules
-    # 4. Configure system banners (legal notices)
-    # 5. Set hostname securely
-    # 6. Configure DNS settings
-    # 7. Set timezone correctly
-    # 8. Disable core dumps
-    # 9. Configure system limits
-
     log_info "Checking kernel parameters..."
 
     local sysctl_checks=(

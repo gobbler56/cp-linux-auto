@@ -13,26 +13,12 @@ source "$SCRIPT_DIR/readme_parser.sh"
 run_service_auditing() {
     log_info "Starting Service Auditing module..."
 
-    # TODO: Implementation
-    # 1. List all running services
-    # 2. Check critical services from README are running
-    # 3. Identify unnecessary/dangerous services:
-    #    - telnet
-    #    - ftp (vs sftp)
-    #    - vnc (if not authorized)
-    #    - cups (if not needed)
-    #    - avahi-daemon (if not needed)
-    # 4. Check service configurations
-    # 5. Enable/disable services as needed
-    # 6. Verify services start on boot
-
     log_info "Listing active services..."
     systemctl list-units --type=service --state=running --no-pager --no-legend | \
         awk '{print $1}' | while read service; do
         log_debug "  - $service"
     done
 
-    # Check critical services if README parsed
     if [[ $README_PARSED -eq 1 ]]; then
         log_info "Checking critical services from README..."
         get_critical_services | while read service; do
