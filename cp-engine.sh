@@ -22,6 +22,7 @@ MODULES=(
     "forensics_questions"
     "user_auditing"
     "account_policy"
+    "security_policy"
     "prohibited_files"
     "malware"
     "unwanted_software"
