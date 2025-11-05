@@ -1,6 +1,7 @@
 #!/bin/bash
 # user_auditing.sh - User Auditing Module
 # Audits system users against authorized user list from README
+# Handles user creation, removal, password policies, and access control
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../lib/utils.sh"
@@ -8,11 +9,708 @@ source "$SCRIPT_DIR/readme_parser.sh"
 
 # Module: User Auditing
 # Category: User Auditing
-# Description: Checks for unauthorized users and ensures authorized users exist
+# Description: Comprehensive user management based on README requirements
 
+# Configuration
+readonly DEFAULT_PASSWORD="CyberPatr!0t2024"
+readonly SECURE_PASSWORD_MIN_LENGTH=12
+readonly PASSWORD_MAX_DAYS=90
+readonly PASSWORD_MIN_DAYS=7
+readonly PASSWORD_WARN_DAYS=14
+
+# System accounts that should never be removed
+readonly SYSTEM_ACCOUNTS=(
+    "root" "daemon" "bin" "sys" "sync" "games" "man" "lp" "mail" "news" "uucp"
+    "proxy" "www-data" "backup" "list" "irc" "gnats" "nobody" "systemd-network"
+    "systemd-resolve" "systemd-timesync" "messagebus" "avahi" "cups" "ssl-cert"
+    "avahi-autoipd" "usbmux" "pulse" "rtkit" "saned" "whoopsie" "kernoops"
+    "speech-dispatcher" "hplip" "sshd" "geoclue" "gnome-initial-setup" "gdm"
+    "mysql" "postgres" "redis" "mongodb" "nginx" "apache" "_apt" "systemd-coredump"
+    "lightdm" "colord" "nm-openvpn" "dnsmasq" "tss" "landscape" "pollinate"
+    "lxd" "uuidd" "tcpdump" "syslog" "snap" "_flatpak"
+)
+
+# Get the main user (the user who is running the system, usually first UID >= 1000)
+get_main_user() {
+    # Get the first user with UID >= 1000 and < 65534 (excluding nobody)
+    awk -F: '$3 >= 1000 && $3 < 65534 { print $1; exit }' /etc/passwd
+}
+
+# Get all current users (UID >= 1000, excluding nobody)
+get_current_users() {
+    awk -F: '$3 >= 1000 && $3 < 65534 && $1 != "nobody" { print $1 }' /etc/passwd
+}
+
+# Get all current admins (users in sudo group)
+get_current_admins() {
+    if getent group sudo &>/dev/null; then
+        getent group sudo | cut -d: -f4 | tr ',' '\n' | grep -v '^$'
+    fi
+
+    # Also check admin group on some systems
+    if getent group admin &>/dev/null; then
+        getent group admin | cut -d: -f4 | tr ',' '\n' | grep -v '^$'
+    fi
+}
+
+# Check if user is a system account
+is_system_account() {
+    local username="$1"
+
+    for sys_account in "${SYSTEM_ACCOUNTS[@]}"; do
+        if [[ "$username" == "$sys_account" ]]; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+# Check if user exists
+user_exists() {
+    local username="$1"
+    id "$username" &>/dev/null
+}
+
+# Check if group exists
+group_exists() {
+    local groupname="$1"
+    getent group "$groupname" &>/dev/null
+}
+
+# Detect display manager
+detect_display_manager() {
+    if systemctl is-active --quiet lightdm 2>/dev/null; then
+        echo "lightdm"
+    elif systemctl is-active --quiet gdm 2>/dev/null || systemctl is-active --quiet gdm3 2>/dev/null; then
+        echo "gdm3"
+    elif systemctl is-active --quiet sddm 2>/dev/null; then
+        echo "sddm"
+    else
+        echo "unknown"
+    fi
+}
+
+# Disable guest account
+disable_guest_account() {
+    log_section "Disabling Guest Account"
+
+    local dm=$(detect_display_manager)
+    log_info "Detected display manager: $dm"
+
+    case "$dm" in
+        lightdm)
+            log_info "Disabling guest account in LightDM..."
+
+            if [[ -f /etc/lightdm/lightdm.conf ]]; then
+                if grep -q "^allow-guest=false" /etc/lightdm/lightdm.conf; then
+                    log_info "Guest account already disabled in lightdm.conf"
+                else
+                    # Add or update allow-guest setting
+                    if grep -q "^allow-guest=" /etc/lightdm/lightdm.conf; then
+                        sed -i 's/^allow-guest=.*/allow-guest=false/' /etc/lightdm/lightdm.conf
+                    else
+                        echo "allow-guest=false" >> /etc/lightdm/lightdm.conf
+                    fi
+                    log_success "Guest account disabled in LightDM"
+                fi
+            else
+                mkdir -p /etc/lightdm
+                cat > /etc/lightdm/lightdm.conf <<EOF
+[Seat:*]
+allow-guest=false
+EOF
+                log_success "Created LightDM config and disabled guest account"
+            fi
+            ;;
+
+        gdm3)
+            log_info "Disabling guest account in GDM3..."
+
+            # Create custom.conf if it doesn't exist
+            mkdir -p /etc/gdm3
+            if [[ ! -f /etc/gdm3/custom.conf ]]; then
+                cat > /etc/gdm3/custom.conf <<EOF
+[daemon]
+TimedLoginEnable=false
+AutomaticLoginEnable=false
+EOF
+                log_success "Created GDM3 config and disabled automatic login"
+            else
+                log_info "GDM3 custom.conf already exists"
+            fi
+
+            # GDM3 doesn't have a direct "guest" account, but we ensure it's not in the system
+            if user_exists "guest"; then
+                log_warn "Found 'guest' user account, will be handled in user removal"
+            fi
+            ;;
+
+        *)
+            log_warn "Unknown display manager, attempting generic guest account handling"
+            if user_exists "guest"; then
+                log_warn "Found 'guest' user account, will be handled in user removal"
+            fi
+            ;;
+    esac
+
+    return 0
+}
+
+# Remove unauthorized users
+remove_unauthorized_users() {
+    log_section "Removing Unauthorized Users"
+
+    local main_user=$(get_main_user)
+    log_info "Main user: $main_user"
+
+    local removed_count=0
+
+    # Get all current users
+    while IFS= read -r current_user; do
+        # Skip if empty
+        [[ -z "$current_user" ]] && continue
+
+        # Skip system accounts
+        if is_system_account "$current_user"; then
+            log_debug "Skipping system account: $current_user"
+            continue
+        fi
+
+        # Skip if authorized
+        if is_user_authorized "$current_user"; then
+            log_debug "User is authorized: $current_user"
+            continue
+        fi
+
+        # This is an unauthorized user
+        log_warn "Found unauthorized user: $current_user"
+
+        if userdel -r "$current_user" 2>/dev/null; then
+            log_success "Removed unauthorized user: $current_user"
+            ((removed_count++))
+        else
+            # Try without removing home directory
+            if userdel "$current_user" 2>/dev/null; then
+                log_success "Removed unauthorized user (kept home): $current_user"
+                ((removed_count++))
+            else
+                log_error "Failed to remove user: $current_user"
+            fi
+        fi
+    done < <(get_current_users)
+
+    if [[ $removed_count -eq 0 ]]; then
+        log_info "No unauthorized users found"
+    else
+        log_success "Removed $removed_count unauthorized user(s)"
+    fi
+
+    return 0
+}
+
+# Remove hidden users (UID < 1000 but not system accounts)
+remove_hidden_users() {
+    log_section "Checking for Hidden Users"
+
+    local removed_count=0
+
+    # Find users with UID < 1000 that aren't in our system accounts list
+    while IFS=: read -r username _ uid _; do
+        # Skip UID 0 (root) and very high UIDs
+        [[ $uid -eq 0 ]] && continue
+        [[ $uid -ge 65534 ]] && continue
+        [[ $uid -ge 1000 ]] && continue
+
+        # Skip if it's a known system account
+        if is_system_account "$username"; then
+            continue
+        fi
+
+        # Skip if authorized in README
+        if is_user_authorized "$username"; then
+            log_warn "User $username has UID < 1000 but is authorized in README"
+            continue
+        fi
+
+        # This is a hidden user
+        log_warn "Found hidden user: $username (UID: $uid)"
+
+        if userdel -r "$username" 2>/dev/null; then
+            log_success "Removed hidden user: $username"
+            ((removed_count++))
+        else
+            if userdel "$username" 2>/dev/null; then
+                log_success "Removed hidden user (kept home): $username"
+                ((removed_count++))
+            else
+                log_error "Failed to remove hidden user: $username"
+            fi
+        fi
+    done < /etc/passwd
+
+    if [[ $removed_count -eq 0 ]]; then
+        log_info "No hidden users found"
+    else
+        log_success "Removed $removed_count hidden user(s)"
+    fi
+
+    return 0
+}
+
+# Handle FTP and system users based on README
+handle_system_users() {
+    log_section "Handling System Users to Restrict"
+
+    local restricted_count=0
+
+    # Get users that should be restricted from README
+    while IFS= read -r username; do
+        [[ -z "$username" ]] && continue
+
+        log_info "Processing system user to restrict: $username"
+
+        # If user doesn't exist, skip
+        if ! user_exists "$username"; then
+            log_debug "User $username doesn't exist, skipping"
+            continue
+        fi
+
+        # If user is authorized, don't restrict
+        if is_user_authorized "$username"; then
+            log_info "User $username is authorized in README, not restricting"
+            continue
+        fi
+
+        # Check if it's a critical system account we shouldn't remove
+        if is_system_account "$username"; then
+            log_info "Disabling login for system user: $username"
+            # Disable password and shell login
+            usermod -L "$username" 2>/dev/null
+            usermod -s /usr/sbin/nologin "$username" 2>/dev/null
+            log_success "Disabled login for system user: $username"
+            ((restricted_count++))
+        else
+            # Not a critical system account and not authorized - remove it
+            log_warn "Removing unauthorized user: $username"
+            if userdel -r "$username" 2>/dev/null; then
+                log_success "Removed user: $username"
+                ((restricted_count++))
+            else
+                if userdel "$username" 2>/dev/null; then
+                    log_success "Removed user (kept home): $username"
+                    ((restricted_count++))
+                else
+                    log_error "Failed to remove user: $username"
+                fi
+            fi
+        fi
+    done < <(get_system_users_to_restrict)
+
+    if [[ $restricted_count -eq 0 ]]; then
+        log_info "No system users to restrict"
+    else
+        log_success "Restricted/removed $restricted_count system user(s)"
+    fi
+
+    return 0
+}
+
+# Manage admin privileges
+manage_admin_privileges() {
+    log_section "Managing Admin Privileges"
+
+    local changes_made=0
+
+    # Remove unauthorized admins from sudo group
+    while IFS= read -r current_admin; do
+        [[ -z "$current_admin" ]] && continue
+
+        if ! is_user_admin "$current_admin"; then
+            log_warn "User $current_admin has sudo but shouldn't be admin"
+
+            # Remove from sudo group
+            if deluser "$current_admin" sudo 2>/dev/null; then
+                log_success "Removed $current_admin from sudo group"
+                ((changes_made++))
+            fi
+
+            # Also remove from admin group if it exists
+            if getent group admin &>/dev/null; then
+                deluser "$current_admin" admin 2>/dev/null
+            fi
+        fi
+    done < <(get_current_admins)
+
+    # Add authorized admins to sudo group
+    while IFS= read -r auth_admin; do
+        [[ -z "$auth_admin" ]] && continue
+
+        # Check if user exists
+        if ! user_exists "$auth_admin"; then
+            log_warn "Admin user $auth_admin doesn't exist, will be created later"
+            continue
+        fi
+
+        # Check if already in sudo group
+        if groups "$auth_admin" | grep -q '\bsudo\b'; then
+            log_debug "User $auth_admin already in sudo group"
+        else
+            log_info "Adding $auth_admin to sudo group"
+            if usermod -aG sudo "$auth_admin" 2>/dev/null; then
+                log_success "Added $auth_admin to sudo group"
+                ((changes_made++))
+            else
+                log_error "Failed to add $auth_admin to sudo group"
+            fi
+        fi
+    done < <(get_authorized_admins)
+
+    if [[ $changes_made -eq 0 ]]; then
+        log_info "Admin privileges are correct"
+    else
+        log_success "Made $changes_made admin privilege change(s)"
+    fi
+
+    return 0
+}
+
+# Create groups
+create_groups() {
+    log_section "Creating Required Groups"
+
+    local created_count=0
+
+    # Get groups from README (JSON array of objects)
+    local groups_json=$(echo "$README_DATA" | jq -r '.groups_to_create[]? | @json')
+
+    if [[ -z "$groups_json" ]]; then
+        log_info "No groups to create"
+        return 0
+    fi
+
+    while IFS= read -r group_json; do
+        [[ -z "$group_json" ]] && continue
+
+        local groupname=$(echo "$group_json" | jq -r '.name')
+        [[ -z "$groupname" || "$groupname" == "null" ]] && continue
+
+        if group_exists "$groupname"; then
+            log_debug "Group already exists: $groupname"
+        else
+            log_info "Creating group: $groupname"
+            if groupadd "$groupname" 2>/dev/null; then
+                log_success "Created group: $groupname"
+                ((created_count++))
+            else
+                log_error "Failed to create group: $groupname"
+            fi
+        fi
+    done <<< "$groups_json"
+
+    if [[ $created_count -gt 0 ]]; then
+        log_success "Created $created_count group(s)"
+    fi
+
+    return 0
+}
+
+# Create missing user accounts
+create_missing_users() {
+    log_section "Creating Missing User Accounts"
+
+    local created_count=0
+
+    # Get recent hires from README
+    local hires_json=$(echo "$README_DATA" | jq -r '.recent_hires[]? | @json')
+
+    if [[ -z "$hires_json" ]]; then
+        log_info "No users to create"
+        return 0
+    fi
+
+    while IFS= read -r hire_json; do
+        [[ -z "$hire_json" ]] && continue
+
+        local username=$(echo "$hire_json" | jq -r '.name')
+        [[ -z "$username" || "$username" == "null" ]] && continue
+
+        if user_exists "$username"; then
+            log_debug "User already exists: $username"
+            continue
+        fi
+
+        log_info "Creating user account: $username"
+
+        # Create user with home directory
+        if useradd -m -s /bin/bash "$username" 2>/dev/null; then
+            log_success "Created user account: $username"
+
+            # Set initial password
+            echo "$username:$DEFAULT_PASSWORD" | chpasswd
+
+            # Force password change on first login
+            passwd -e "$username" 2>/dev/null
+
+            log_info "Set default password for $username (will be forced to change)"
+            ((created_count++))
+        else
+            log_error "Failed to create user: $username"
+        fi
+    done <<< "$hires_json"
+
+    if [[ $created_count -gt 0 ]]; then
+        log_success "Created $created_count user account(s)"
+    fi
+
+    return 0
+}
+
+# Add users to their groups
+add_users_to_groups() {
+    log_section "Adding Users to Groups"
+
+    local changes_made=0
+
+    # Process each authorized user and their groups
+    while IFS= read -r username; do
+        [[ -z "$username" ]] && continue
+
+        # Skip if user doesn't exist
+        if ! user_exists "$username"; then
+            continue
+        fi
+
+        # Get groups for this user
+        while IFS= read -r groupname; do
+            [[ -z "$groupname" ]] && continue
+
+            # Skip if group doesn't exist
+            if ! group_exists "$groupname"; then
+                log_warn "Group $groupname doesn't exist for user $username"
+                continue
+            fi
+
+            # Check if user is already in group
+            if groups "$username" | grep -q "\b$groupname\b"; then
+                log_debug "User $username already in group $groupname"
+            else
+                log_info "Adding $username to group $groupname"
+                if usermod -aG "$groupname" "$username" 2>/dev/null; then
+                    log_success "Added $username to group $groupname"
+                    ((changes_made++))
+                else
+                    log_error "Failed to add $username to group $groupname"
+                fi
+            fi
+        done < <(get_user_groups "$username")
+    done < <(get_authorized_users)
+
+    # Also process groups_to_create and their members
+    local groups_json=$(echo "$README_DATA" | jq -r '.groups_to_create[]? | @json')
+
+    while IFS= read -r group_json; do
+        [[ -z "$group_json" ]] && continue
+
+        local groupname=$(echo "$group_json" | jq -r '.name')
+        local members=$(echo "$group_json" | jq -r '.members[]?')
+
+        [[ -z "$groupname" || "$groupname" == "null" ]] && continue
+
+        while IFS= read -r member; do
+            [[ -z "$member" ]] && continue
+
+            if ! user_exists "$member"; then
+                log_warn "User $member doesn't exist for group $groupname"
+                continue
+            fi
+
+            if groups "$member" | grep -q "\b$groupname\b"; then
+                log_debug "User $member already in group $groupname"
+            else
+                log_info "Adding $member to group $groupname"
+                if usermod -aG "$groupname" "$member" 2>/dev/null; then
+                    log_success "Added $member to group $groupname"
+                    ((changes_made++))
+                else
+                    log_error "Failed to add $member to group $groupname"
+                fi
+            fi
+        done <<< "$members"
+    done <<< "$groups_json"
+
+    if [[ $changes_made -eq 0 ]]; then
+        log_info "All users are in correct groups"
+    else
+        log_success "Made $changes_made group membership change(s)"
+    fi
+
+    return 0
+}
+
+# Check for null/blank passwords
+fix_null_passwords() {
+    log_section "Checking for Null/Blank Passwords"
+
+    local fixed_count=0
+    local main_user=$(get_main_user)
+
+    # Check shadow file for users with empty password field
+    while IFS=: read -r username password_field _; do
+        # Skip if username is empty
+        [[ -z "$username" ]] && continue
+
+        # Skip system accounts
+        is_system_account "$username" && continue
+
+        # Check if password field is empty or just contains special markers
+        if [[ -z "$password_field" ]] || [[ "$password_field" == "!" ]] || [[ "$password_field" == "*" ]]; then
+            # Skip locked system accounts
+            is_system_account "$username" && continue
+
+            # Check if user is authorized
+            if is_user_authorized "$username"; then
+                log_warn "User $username has no password set"
+
+                # Set a password (skip main user as per requirements)
+                if [[ "$username" != "$main_user" ]]; then
+                    echo "$username:$DEFAULT_PASSWORD" | chpasswd
+                    passwd -e "$username" 2>/dev/null  # Force change on login
+                    log_success "Set password for user: $username"
+                    ((fixed_count++))
+                else
+                    log_warn "Skipping main user $username (don't change main user password)"
+                fi
+            fi
+        fi
+    done < /etc/shadow
+
+    if [[ $fixed_count -eq 0 ]]; then
+        log_info "No null passwords found"
+    else
+        log_success "Fixed $fixed_count null password(s)"
+    fi
+
+    return 0
+}
+
+# Enforce password policies
+enforce_password_policies() {
+    log_section "Enforcing Password Policies"
+
+    local changes_made=0
+    local main_user=$(get_main_user)
+
+    # Process each authorized user
+    while IFS= read -r username; do
+        [[ -z "$username" ]] && continue
+
+        # Skip if user doesn't exist
+        if ! user_exists "$username"; then
+            continue
+        fi
+
+        # Skip system accounts
+        if is_system_account "$username"; then
+            continue
+        fi
+
+        log_info "Setting password policy for: $username"
+
+        # Set password aging
+        # -M: max days, -m: min days, -W: warn days
+        if chage -M "$PASSWORD_MAX_DAYS" -m "$PASSWORD_MIN_DAYS" -W "$PASSWORD_WARN_DAYS" "$username" 2>/dev/null; then
+            log_success "Set password aging for $username (max: $PASSWORD_MAX_DAYS, min: $PASSWORD_MIN_DAYS, warn: $PASSWORD_WARN_DAYS)"
+            ((changes_made++))
+        else
+            log_error "Failed to set password policy for $username"
+        fi
+
+        # Ensure password expires (remove -1 which means never)
+        chage -E -1 "$username" 2>/dev/null
+
+    done < <(get_authorized_users)
+
+    if [[ $changes_made -gt 0 ]]; then
+        log_success "Applied password policies to $changes_made user(s)"
+    fi
+
+    return 0
+}
+
+# Check password hashing algorithm
+check_password_hashing() {
+    log_section "Checking Password Hashing Algorithm"
+
+    # Check what hashing algorithm is configured
+    if [[ -f /etc/pam.d/common-password ]]; then
+        if grep -q "pam_unix.so.*sha512" /etc/pam.d/common-password; then
+            log_success "Password hashing is set to SHA512"
+        elif grep -q "pam_unix.so.*yescrypt" /etc/pam.d/common-password; then
+            log_success "Password hashing is set to yescrypt (modern)"
+        else
+            log_warn "Password hashing may not be using a secure algorithm"
+            log_info "Consider configuring SHA512 or yescrypt in /etc/pam.d/common-password"
+        fi
+    fi
+
+    # Check /etc/login.defs
+    if [[ -f /etc/login.defs ]]; then
+        local encrypt_method=$(grep "^ENCRYPT_METHOD" /etc/login.defs | awk '{print $2}')
+        if [[ "$encrypt_method" == "SHA512" ]] || [[ "$encrypt_method" == "YESCRYPT" ]]; then
+            log_success "ENCRYPT_METHOD in login.defs is set to $encrypt_method"
+        else
+            log_warn "ENCRYPT_METHOD in login.defs is: ${encrypt_method:-not set}"
+        fi
+    fi
+
+    return 0
+}
+
+# Disable password login for system users
+disable_system_user_logins() {
+    log_section "Disabling Login for System Users"
+
+    local disabled_count=0
+
+    # Get system users to restrict
+    while IFS= read -r username; do
+        [[ -z "$username" ]] && continue
+
+        # Only process if it's a system account
+        if ! is_system_account "$username"; then
+            continue
+        fi
+
+        # Skip if user doesn't exist
+        if ! user_exists "$username"; then
+            continue
+        fi
+
+        log_info "Disabling login for system user: $username"
+
+        # Lock the password
+        usermod -L "$username" 2>/dev/null
+
+        # Set shell to nologin
+        usermod -s /usr/sbin/nologin "$username" 2>/dev/null
+
+        log_success "Disabled password login for: $username"
+        ((disabled_count++))
+    done < <(get_system_users_to_restrict)
+
+    if [[ $disabled_count -gt 0 ]]; then
+        log_success "Disabled login for $disabled_count system user(s)"
+    fi
+
+    return 0
+}
+
+# Main module execution
 run_user_auditing() {
-    log_info "Starting User Auditing module..."
+    log_section "User Auditing Module"
 
+    # Ensure README is parsed
     if [[ $README_PARSED -eq 0 ]]; then
         log_warn "README not parsed, parsing now..."
         parse_readme || {
@@ -21,24 +719,22 @@ run_user_auditing() {
         }
     fi
 
-    log_info "Auditing system users..."
+    # Run all auditing functions
+    disable_guest_account
+    remove_unauthorized_users
+    remove_hidden_users
+    handle_system_users
+    manage_admin_privileges
+    create_groups
+    create_missing_users
+    add_users_to_groups
+    fix_null_passwords
+    enforce_password_policies
+    check_password_hashing
+    disable_system_user_logins
 
-    log_debug "Current system users (UID >= 1000):"
-    awk -F: '$3 >= 1000 && $1 != "nobody" {print $1}' /etc/passwd | while read -r user; do
-        log_debug "  - $user"
-    done
-
-    log_info "Authorized users from README:"
-    get_authorized_users | while read -r user; do
-        log_info "  - $user"
-    done
-
-    log_info "Terminated users from README:"
-    get_terminated_users | while read -r user; do
-        log_warn "  - $user (should be removed)"
-    done
-
-    log_warn "This module needs full implementation"
+    log_section "User Auditing Complete"
+    log_success "All user auditing tasks completed"
 
     return 0
 }
