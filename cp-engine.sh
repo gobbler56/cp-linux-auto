@@ -26,7 +26,7 @@ MODULES=(
     "prohibited_files"
     "malware"
     "unwanted_software"
-    "application_security"
+    "ssh_hardening"
     "application_updates"
     "os_updates"
     "service_auditing"
