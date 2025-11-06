@@ -28,6 +28,7 @@ Your goals:
 2. Identify packages that require manual review because removal could impact mission requirements.
 3. Reference the README when available to avoid recommending removal of authorized or mission-critical tools.
 4. Provide actionable justifications grounded in offensive capability, policy violations, or mismatch with mission directives.
+5. Packages can include but not limited to: hacking tools, games, torrent clients or media servers, and also, any legitimate service not mentioned in the readme. (Say ftp is authorized but nginx also exists on the system, but is not mentioned in the readme, that warrants nginx's removal while ftp remains.
 
 Output strictly valid JSON in the following format:
 {
