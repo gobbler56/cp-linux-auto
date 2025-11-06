@@ -314,6 +314,39 @@ disable_null_passwords() {
     return 0
 }
 
+# 35: Ensure root account has no blank password
+lock_root_account_if_blank() {
+    log_section "Ensuring Root Account is Locked"
+
+    local shadow_entry
+    if ! shadow_entry=$(getent shadow root 2>/dev/null); then
+        log_error "Unable to read root entry from /etc/shadow"
+        return 1
+    fi
+
+    local username password_hash rest
+    local IFS=':'
+    read -r username password_hash rest <<< "$shadow_entry"
+
+    if [[ -z "$password_hash" ]]; then
+        log_warn "Root account has a blank password hash; locking account"
+        if passwd -l root >/dev/null 2>&1; then
+            log_score 4 "Locked root account to remove blank password"
+            log_success "Root account locked (blank password removed)"
+            return 0
+        else
+            log_error "Failed to lock root account"
+            return 1
+        fi
+    elif [[ "$password_hash" == '!'* || "$password_hash" == '*'* ]]; then
+        log_info "Root account is already locked"
+    else
+        log_info "Root account already has a password hash configured"
+    fi
+
+    return 0
+}
+
 # 33: Configure account lockout policy with faillock
 configure_account_lockout() {
     log_section "Configuring Account Lockout Policy"
@@ -522,6 +555,7 @@ run_account_policy() {
     configure_password_history        # Item 25
     configure_password_hashing        # Item 30
     disable_null_passwords            # Items 31, 32
+    lock_root_account_if_blank        # Item 35
     configure_account_lockout         # Item 33
     disable_user_enumeration          # Item 34
 
@@ -544,6 +578,7 @@ run_account_policy() {
     log_info "  ✓ GECOS password checks enabled"
     log_info "  ✓ Secure password hashing configured"
     log_info "  ✓ Null password authentication disabled"
+    log_info "  ✓ Root account checked for blank password"
     log_info "  ✓ Account lockout policy configured (lock after $DEFAULT_LOCK_DENY attempts)"
     log_info "  ✓ User enumeration disabled in login greeter"
     log_info ""
