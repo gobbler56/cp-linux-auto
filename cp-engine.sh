@@ -27,7 +27,6 @@ MODULES=(
     "malware"
     "unwanted_software"
     "ssh_hardening"
-    "application_updates"
     "os_updates"
     "service_auditing"
     "local_policy"
