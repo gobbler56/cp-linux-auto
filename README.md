@@ -29,7 +29,6 @@ cp-linux-auto/
 │   ├── malware.sh
 │   ├── unwanted_software.sh
 │   ├── ssh_hardening.sh
-│   ├── application_updates.sh
 │   ├── os_updates.sh
 │   ├── service_auditing.sh
 │   ├── local_policy.sh
@@ -145,37 +144,33 @@ sudo ./cp-engine.sh -c
 - Validates configuration before applying changes
 - Supports Ubuntu 24.04 and Linux Mint 21
 
-### 9. **Application Updates**
-- Updates package lists
-- Checks for available application updates
-- Installs security patches
-- Handles snap and flatpak packages
-
-### 10. **OS Updates**
+### 9. **OS Updates**
 - Checks kernel version and updates
 - Installs OS security patches
 - Configures automatic security updates
 - Detects required system reboots
+- Runs full system upgrade (apt-get full-upgrade)
+- Handles all package updates and dependencies
 
-### 11. **Service Auditing**
+### 10. **Service Auditing**
 - Lists all running services
 - Ensures critical services are running
 - Identifies unnecessary/dangerous services
 - Manages service startup configuration
 
-### 12. **Local Policy**
+### 11. **Local Policy**
 - Configures sudo permissions
 - Sets secure file permissions
 - Configures audit logging (auditd)
 - Sets secure umask values
 
-### 13. **Defensive Countermeasures**
+### 12. **Defensive Countermeasures**
 - Enables and configures UFW firewall
 - Sets up fail2ban for intrusion prevention
 - Enables auditd for system auditing
 - Configures file integrity monitoring (AIDE)
 
-### 14. **OS Settings**
+### 13. **OS Settings**
 - Configures kernel security parameters (sysctl)
 - Disables unnecessary kernel modules
 - Sets up system banners
