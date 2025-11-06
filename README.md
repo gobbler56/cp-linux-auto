@@ -28,7 +28,7 @@ cp-linux-auto/
 │   ├── prohibited_files.sh
 │   ├── malware.sh
 │   ├── unwanted_software.sh
-│   ├── application_security.sh
+│   ├── ssh_hardening.sh
 │   ├── application_updates.sh
 │   ├── os_updates.sh
 │   ├── service_auditing.sh
@@ -134,11 +134,16 @@ sudo ./cp-engine.sh -c
 - Detects P2P software and games
 - Recommends packages for removal
 
-### 8. **Application Security**
-- Hardens SSH configuration
-- Secures web server configurations
-- Configures firewall rules (UFW)
-- Reviews application-specific security settings
+### 8. **SSH Hardening**
+- Comprehensive SSH server hardening (PermitRootLogin, PasswordAuthentication, etc.)
+- Configures strong cryptographic algorithms (ciphers, MACs, key exchange)
+- Hardens SSH file and directory permissions
+- Creates SSH banner for unauthorized access warnings
+- Removes weak Diffie-Hellman moduli (>= 3071-bit only)
+- Configures UFW firewall rules for custom SSH ports
+- Sets up user SSH directories and authorized_keys
+- Validates configuration before applying changes
+- Supports Ubuntu 24.04 and Linux Mint 21
 
 ### 9. **Application Updates**
 - Updates package lists
