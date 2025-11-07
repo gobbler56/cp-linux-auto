@@ -16,7 +16,8 @@ fi
 # Category: Unwanted Software
 # Description: Removes unauthorized applications and potential security risks
 
-readonly UNWANTED_SYSTEM_PROMPT='You are an elite defensive cybersecurity analyst helping a CyberPatriot team triage Linux packages for removal.
+read -r -d '' UNWANTED_SYSTEM_PROMPT <<'EOF'
+You are an elite defensive cybersecurity analyst helping a CyberPatriot team triage Linux packages for removal.
 
 You will receive:
 - A curated list of high-risk offensive or non-compliant packages detected on the system.
@@ -28,7 +29,7 @@ Your goals:
 2. Identify packages that require manual review because removal could impact mission requirements.
 3. Reference the README when available to avoid recommending removal of authorized or mission-critical tools.
 4. Provide actionable justifications grounded in offensive capability, policy violations, or mismatch with mission directives.
-5. Packages can include but not limited to: hacking tools, games, torrent clients or media servers, and also, any legitimate service not mentioned in the readme. (Say ftp is authorized but nginx also exists on the system, but is not mentioned in the readme, that warrants nginx's removal while ftp remains.
+5. Packages can include but not limited to: hacking tools, games, torrent clients or media servers, and also, any legitimate service not mentioned in the readme. (Say ftp is authorized but nginx also exists on the system, but is not mentioned in the readme, that warrants nginx's removal while ftp remains.)
 
 Output strictly valid JSON in the following format:
 {
@@ -52,7 +53,10 @@ Output strictly valid JSON in the following format:
   ]
 }
 
-Always tailor suggestions to CyberPatriot scoring priorities, avoid duplicates, and prefer removal of obviously offensive or gaming software unless the README authorizes it.'
+Always tailor suggestions to CyberPatriot scoring priorities, avoid duplicates, and prefer removal of obviously offensive or gaming software unless the README authorizes it.
+EOF
+
+readonly UNWANTED_SYSTEM_PROMPT
 
 read -r -d '' UNWANTED_PACKAGE_LIST <<'EOF'
 ace aircrack-ng aisleriot amap android-sdk apache-users apktool apt2 arachni armitage arp-scan asleap backdoor-factory bbqsql bed beef besside-ng bettercap ettercap-common binwalk blindepephant bluelog bluemaho bluepot blueranger bluesnarfer braa brutespray bulk-extractor bully burpsuite capstone casefile cewl chntpw cisco-auditing-tool cisco-global-exploiter cisco-ocs cisco-torch cmospwd commix copy-router-config cowpattay crackle creddump crowbar crunch cryptcat cuckoo cutycapt cymothoa davtest dbd dc3dd ddrescue deblace deluge-common deluge-gtk dex2jar dff dhcpig dirb dirbuster distorm3 dns2tcp dnschef dnsenum dnsmap dnstracer dnswalk doona dotdotpwn dumpzilla eapmd5pass easside-ng edb-debugger enum4linux enumiax explooitdb extundelete eyewitness faraday fern-wifi-cracker fierce fiked fimap findmyhash firewalk five-or-more foremost four-in-a-row fragroute fragrouter freeradius-wpe funkload funkloader galleta gameconqueror ghost-phisher ghostphisher giskismet gnome-chess gnome-klotski gnome-mahjongg gnome-mines gnome-robots gnome-sudoku gnome-taquin gnome-tetravex gobuster golismero goofile gpp-decrypt gqrx grabber gr-scan guymager hampster-sidejack hashcat hash-identifier hexinject hexorbase hitori hostadp-wpe hping3 httptunnel hurl hydra iagno iaxflood ident-user-enum inspy intersect intrace inundator inviteflood iphone-backup-analyzer ismtp isr-evilgrade ivstools jad javasnoop jboss-autopwn jd-gui john johnny joomscan jsql-injection kalibrate-rtl keimpx killerbee kismet lbd lightsoff linux-exploit-suggester lynis makeivs-ng maltego-teeth manaplus maskprocessor masscan mdk3 metagoofil metasploit-framework mfcuk mfoc mfterm miranda mitmproxy msfpc multiforcer multimon-ng nbtscan ncrack nikto nishang nmap ntop oclgausscrack ohrwurm ollydbg openvas ophcrack oscanner osrframework p0f pack packetforge-ng padbuster paros parsero patator pdfid pdgmail peepdf phrasendrescher pixiewps plecost polenum powerfuzzer powersploit protos-sip proxystrike pwnat pyrit quadrapassel rainbow-crack rcracki-mt reaver rebind recon-ng redfang regripper remmina responder ridenum routersploit rsmangler rtlsdr-scanner rtpbreak rtpflood rtpinsertsound rtpmixsound sakis3g sbd sctpscan seclists set sfuzz shellnoob shellter sidguesser siparmyknife sipp sipvicious skipfish slowhttptest smali smbmap smtp-user-enum sniffjoke snmp-check sparta splsus spooftooph sqldict sqlmap sqlninja sqlsus sslsplit sslstrip sslyze statsprocessor sublist3r swell-foop t50 tali temineter thc-hydra thc-ipv6 thc-pptp-bruter thc-ssl-doc theharvester tkiptun-ng tlssled tnscmd10g toolkit transmission-cli transmission-common transmission-daemon transmission-gtk truecrach twofi u3-pwn ua-tester unicornscan uniscan unix-privesc-check valgrind vinagre voiphopper volatility w3af webscarab webshag webshells webslayer weevely wesside-ng wfuzz whatweb wifi-honey wifiphisher wifitap wifite winexe wireshark wordlists wpaclean wpscan xplico xspy xsser yara yersinia zaproxy
@@ -343,9 +347,11 @@ run_unwanted_software() {
     log_section "AI Unwanted Software Recommendations"
     log_info "Packages to remove: ${removal_count:-0}"
     if [[ "$removal_count" =~ ^[0-9]+$ ]] && (( removal_count > 0 )); then
-        echo "$parsed_json" | jq -r '.packages_to_remove[] | "- \(.package): \(.reason) [confidence: \(.confidence)]"' | while read -r line; do
-            log_warn "$line"
-        done
+        echo "$parsed_json" \
+            | jq -r '.packages_to_remove[] | "- \(.package): \(.reason) [confidence: \(.confidence)]"' \
+            | while read -r line; do
+                log_warn "$line"
+            done
     fi
 
     log_info "Packages for manual review: ${review_count:-0}"
