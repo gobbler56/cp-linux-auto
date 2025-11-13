@@ -239,7 +239,10 @@ get_authorized_users() {
         return 1
     fi
 
-    echo "$README_DATA" | jq -r '.all_users[].name'
+    echo "$README_DATA" | jq -r '
+        .all_users[]?.name,
+        (.recent_hires[]? | if type == "string" then . else .name end)
+    ' | grep -v '^$' | sort -u
 }
 
 # Get authorized admin users
@@ -249,7 +252,15 @@ get_authorized_admins() {
         return 1
     fi
 
-    echo "$README_DATA" | jq -r '.all_users[] | select(.account_type == "admin") | .name'
+    echo "$README_DATA" | jq -r '
+        (.all_users[]? 
+            | select((.account_type // "" | ascii_downcase) == "admin")
+            | .name),
+        (.recent_hires[]?
+            | select(type == "object")
+            | select((.account_type // "" | ascii_downcase) == "admin")
+            | .name)
+    ' | grep -v '^$' | sort -u
 }
 
 # Get users to create
@@ -259,7 +270,7 @@ get_users_to_create() {
         return 1
     fi
 
-    echo "$README_DATA" | jq -r '.recent_hires[]'
+    echo "$README_DATA" | jq -c '.recent_hires[]?'
 }
 
 # Get terminated users
@@ -290,10 +301,15 @@ is_user_authorized() {
         return 1
     fi
 
-    local count=$(echo "$README_DATA" | jq -r --arg user "$username" \
-        '.all_users[] | select(.name == $user) | .name' | wc -l)
-
-    [[ $count -gt 0 ]]
+    echo "$README_DATA" | jq -e --arg user "$username" '
+        [
+            (.all_users[]? | select(.name == $user)),
+            (.recent_hires[]?
+                | if type == "string" then select(. == $user)
+                  else select(.name == $user)
+                  end)
+        ] | length > 0
+    ' >/dev/null 2>&1
 }
 
 # Check if user should be admin
@@ -304,10 +320,16 @@ is_user_admin() {
         return 1
     fi
 
-    local account_type=$(echo "$README_DATA" | jq -r --arg user "$username" \
-        '.all_users[] | select(.name == $user) | .account_type')
-
-    [[ "$account_type" == "admin" ]]
+    echo "$README_DATA" | jq -e --arg user "$username" '
+        [
+            (.all_users[]?
+                | select(.name == $user)
+                | (.account_type // "" | ascii_downcase == "admin")),
+            (.recent_hires[]?
+                | select(type == "object" and .name == $user)
+                | (.account_type // "" | ascii_downcase == "admin"))
+        ] | any
+    ' >/dev/null 2>&1
 }
 
 # Check if user is terminated
@@ -353,8 +375,12 @@ get_user_groups() {
         return 1
     fi
 
-    echo "$README_DATA" | jq -r --arg user "$username" \
-        '.all_users[] | select(.name == $user) | .groups[]?'
+    echo "$README_DATA" | jq -r --arg user "$username" '
+        (.all_users[]? | select(.name == $user) | .groups[]?),
+        (.recent_hires[]?
+            | select(type == "object" and .name == $user)
+            | .groups[]?)
+    ' | grep -v '^$' | sort -u
 }
 
 # Export functions

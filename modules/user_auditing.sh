@@ -43,14 +43,24 @@ get_current_users() {
 
 # Get all current admins (users in sudo group)
 get_current_admins() {
-    if getent group sudo &>/dev/null; then
-        getent group sudo | cut -d: -f4 | tr ',' '\n' | grep -v '^$'
-    fi
+    declare -A seen
+    local group users user
 
-    # Also check admin group on some systems
-    if getent group admin &>/dev/null; then
-        getent group admin | cut -d: -f4 | tr ',' '\n' | grep -v '^$'
-    fi
+    for group in sudo admin adm; do
+        if getent group "$group" &>/dev/null; then
+            users=$(getent group "$group" | awk -F: '{print $4}')
+            IFS=',' read -ra current <<< "$users"
+            for user in "${current[@]}"; do
+                user=$(echo "$user" | xargs)
+                [[ -z "$user" ]] && continue
+                seen["$user"]=1
+            done
+        fi
+    done
+
+    for user in "${!seen[@]}"; do
+        echo "$user"
+    done
 }
 
 # Check if user is a system account
@@ -322,49 +332,57 @@ manage_admin_privileges() {
 
     local changes_made=0
 
-    # Remove unauthorized admins from sudo group
-    while IFS= read -r current_admin; do
+    mapfile -t current_admins < <(get_current_admins | sort -u)
+    mapfile -t authorized_admins < <(get_authorized_admins | sort -u)
+
+    # Remove unauthorized admins from privileged groups
+    for current_admin in "${current_admins[@]}"; do
         [[ -z "$current_admin" ]] && continue
 
         if ! is_user_admin "$current_admin"; then
-            log_warn "User $current_admin has sudo but shouldn't be admin"
+            log_warn "User $current_admin has administrative access but isn't authorized"
 
-            # Remove from sudo group
-            if deluser "$current_admin" sudo 2>/dev/null; then
-                log_success "Removed $current_admin from sudo group"
-                ((changes_made++))
-            fi
-
-            # Also remove from admin group if it exists
-            if getent group admin &>/dev/null; then
-                deluser "$current_admin" admin 2>/dev/null
-            fi
+            for group in sudo admin adm; do
+                if getent group "$group" &>/dev/null && groups "$current_admin" | grep -qw "$group"; then
+                    log_info "Removing $current_admin from $group group"
+                    if deluser "$current_admin" "$group" 2>/dev/null; then
+                        log_success "Removed $current_admin from $group group"
+                        ((changes_made++))
+                    else
+                        log_error "Failed to remove $current_admin from $group group"
+                    fi
+                fi
+            done
         fi
-    done < <(get_current_admins)
+    done
 
-    # Add authorized admins to sudo group
-    while IFS= read -r auth_admin; do
+    # Add authorized admins to privileged groups
+    for auth_admin in "${authorized_admins[@]}"; do
         [[ -z "$auth_admin" ]] && continue
 
-        # Check if user exists
         if ! user_exists "$auth_admin"; then
-            log_warn "Admin user $auth_admin doesn't exist, will be created later"
+            log_warn "Admin user $auth_admin doesn't exist yet"
             continue
         fi
 
-        # Check if already in sudo group
-        if groups "$auth_admin" | grep -q '\bsudo\b'; then
-            log_debug "User $auth_admin already in sudo group"
-        else
-            log_info "Adding $auth_admin to sudo group"
-            if usermod -aG sudo "$auth_admin" 2>/dev/null; then
-                log_success "Added $auth_admin to sudo group"
-                ((changes_made++))
-            else
-                log_error "Failed to add $auth_admin to sudo group"
+        for group in sudo adm; do
+            if ! getent group "$group" &>/dev/null; then
+                continue
             fi
-        fi
-    done < <(get_authorized_admins)
+
+            if groups "$auth_admin" | grep -qw "$group"; then
+                log_debug "User $auth_admin already in $group group"
+            else
+                log_info "Adding $auth_admin to $group group"
+                if usermod -aG "$group" "$auth_admin" 2>/dev/null; then
+                    log_success "Added $auth_admin to $group group"
+                    ((changes_made++))
+                else
+                    log_error "Failed to add $auth_admin to $group group"
+                fi
+            fi
+        done
+    done
 
     if [[ $changes_made -eq 0 ]]; then
         log_info "Admin privileges are correct"
@@ -392,7 +410,15 @@ create_groups() {
     while IFS= read -r group_json; do
         [[ -z "$group_json" ]] && continue
 
-        local groupname=$(echo "$group_json" | jq -r '.name')
+        local entry_type=$(echo "$group_json" | jq -r 'type')
+        local groupname=""
+
+        if [[ "$entry_type" == "string" ]]; then
+            groupname=$(echo "$group_json" | jq -r '.')
+        else
+            groupname=$(echo "$group_json" | jq -r '.name // empty')
+        fi
+
         [[ -z "$groupname" || "$groupname" == "null" ]] && continue
 
         if group_exists "$groupname"; then
@@ -432,7 +458,17 @@ create_missing_users() {
     while IFS= read -r hire_json; do
         [[ -z "$hire_json" ]] && continue
 
-        local username=$(echo "$hire_json" | jq -r '.name')
+        local entry_type=$(echo "$hire_json" | jq -r 'type')
+        local username=""
+        local account_type="standard"
+
+        if [[ "$entry_type" == "string" ]]; then
+            username=$(echo "$hire_json" | jq -r '.')
+        else
+            username=$(echo "$hire_json" | jq -r '.name // empty')
+            account_type=$(echo "$hire_json" | jq -r '(.account_type // "standard") | ascii_downcase')
+        fi
+
         [[ -z "$username" || "$username" == "null" ]] && continue
 
         if user_exists "$username"; then
@@ -454,6 +490,22 @@ create_missing_users() {
 
             log_info "Set default password for $username (will be forced to change)"
             ((created_count++))
+
+            if [[ "$account_type" == "admin" ]]; then
+                for group in sudo adm; do
+                    if getent group "$group" &>/dev/null; then
+                        if groups "$username" | grep -qw "$group"; then
+                            continue
+                        fi
+
+                        if usermod -aG "$group" "$username" 2>/dev/null; then
+                            log_success "Added $username to $group group"
+                        else
+                            log_error "Failed to add $username to $group group"
+                        fi
+                    fi
+                done
+            fi
         else
             log_error "Failed to create user: $username"
         fi
@@ -512,8 +564,14 @@ add_users_to_groups() {
     while IFS= read -r group_json; do
         [[ -z "$group_json" ]] && continue
 
-        local groupname=$(echo "$group_json" | jq -r '.name')
-        local members=$(echo "$group_json" | jq -r '.members[]?')
+        local entry_type=$(echo "$group_json" | jq -r 'type')
+        local groupname=""
+
+        if [[ "$entry_type" == "string" ]]; then
+            groupname=$(echo "$group_json" | jq -r '.')
+        else
+            groupname=$(echo "$group_json" | jq -r '.name // empty')
+        fi
 
         [[ -z "$groupname" || "$groupname" == "null" ]] && continue
 
@@ -536,7 +594,7 @@ add_users_to_groups() {
                     log_error "Failed to add $member to group $groupname"
                 fi
             fi
-        done <<< "$members"
+        done <<< "$(echo "$group_json" | jq -r 'if type == "object" then .members[]? else empty end')"
     done <<< "$groups_json"
 
     if [[ $changes_made -eq 0 ]]; then
