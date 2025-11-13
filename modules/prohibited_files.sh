@@ -17,7 +17,7 @@ readonly PROHIBITED_MEDIA_EXTS=(
 
 readonly PROHIBITED_PASSWORD_EXTS=(
     "txt" "text" "csv" "tsv" "log" "pdf" "doc" "docx" "odt" "rtf"
-    "xls" "xlsx" "ods" "json" "xml" "kdbx"
+    "xls" "xlsx" "ods" "json" "xml" "kdbx" "zip"
 )
 
 readonly PROHIBITED_PASSWORD_KEYWORDS=(
@@ -417,6 +417,45 @@ run_prohibited_files() {
                     echo "$parsed_json" | jq -r '.flagged[] | "- \(.path) [\(.category)] (\(.confidence)): \(.reason)"' | while read -r line; do
                         log_warn "$line"
                     done
+
+                    if [[ -t 0 ]]; then
+                        echo "$parsed_json" | jq -c '.flagged[]' | while IFS= read -r item; do
+                            local path=$(echo "$item" | jq -r '.path')
+                            local category=$(echo "$item" | jq -r '.category // "unknown"')
+                            local confidence=$(echo "$item" | jq -r '.confidence // "unknown"')
+                            local reason=$(echo "$item" | jq -r '.reason // ""')
+
+                            local header_shown=0
+                            while true; do
+                                if (( header_shown == 0 )); then
+                                    echo "  Category: $category | Confidence: $confidence"
+                                    [[ -n "$reason" ]] && echo "  Reason: $reason"
+                                    header_shown=1
+                                fi
+                                read -r -p "Remove '$path'? [y/N] " response
+                                response=${response,,}
+                                if [[ "$response" == "y" || "$response" == "yes" ]]; then
+                                    if [[ -e "$path" ]]; then
+                                        if rm -f -- "$path"; then
+                                            log_success "Removed $path"
+                                        else
+                                            log_error "Failed to remove $path"
+                                        fi
+                                    else
+                                        log_warn "File not found: $path"
+                                    fi
+                                    break
+                                elif [[ -z "$response" || "$response" == "n" || "$response" == "no" ]]; then
+                                    log_info "Left in place: $path (category: $category, confidence: $confidence, reason: $reason)"
+                                    break
+                                else
+                                    echo "Please answer 'y' or 'n'."
+                                fi
+                            done
+                        done
+                    else
+                        log_info "Skipping interactive removal prompts (no TTY detected)"
+                    fi
                 fi
             else
                 log_warn "AI response did not contain valid JSON"
