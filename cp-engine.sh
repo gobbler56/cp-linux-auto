@@ -4,12 +4,13 @@
 
 set -euo pipefail
 
-# Get script directory
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Get engine directory (stable even after sourcing modules that define SCRIPT_DIR)
+ENGINE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly ENGINE_DIR
 
 # Load core libraries
-source "$SCRIPT_DIR/lib/utils.sh"
-source "$SCRIPT_DIR/lib/openrouter.sh"
+source "$ENGINE_DIR/lib/utils.sh"
+source "$ENGINE_DIR/lib/openrouter.sh"
 
 # Default settings
 SCORE_FILE="${SCORE_FILE:-/var/log/cyberpatriot/score.log}"
@@ -35,15 +36,15 @@ sanitize_module_name() {
 discover_modules() {
     MODULES=()
 
-    if [[ ! -d "$SCRIPT_DIR/modules" ]]; then
-        log_error "Modules directory not found: $SCRIPT_DIR/modules"
+    if [[ ! -d "$ENGINE_DIR/modules" ]]; then
+        log_error "Modules directory not found: $ENGINE_DIR/modules"
         return 1
     fi
 
     local module_files=()
     while IFS= read -r module_file; do
         module_files+=("$module_file")
-    done < <(find "$SCRIPT_DIR/modules" -maxdepth 1 -type f -name '*.sh' -print | sort)
+    done < <(find "$ENGINE_DIR/modules" -maxdepth 1 -type f -name '*.sh' -print | sort)
 
     for module_path in "${module_files[@]}"; do
         local module_name
@@ -61,7 +62,7 @@ discover_modules() {
 
 # Ensure module scripts are executable so they can be sourced reliably
 ensure_module_permissions() {
-    if [[ ! -d "$SCRIPT_DIR/modules" ]]; then
+    if [[ ! -d "$ENGINE_DIR/modules" ]]; then
         log_warn "Modules directory not found when ensuring permissions"
         return
     fi
@@ -74,11 +75,11 @@ ensure_module_permissions() {
                 log_warn "Failed to set executable permission on $module_script"
             fi
         fi
-    done < <(find "$SCRIPT_DIR/modules" -maxdepth 1 -type f -name '*.sh')
+    done < <(find "$ENGINE_DIR/modules" -maxdepth 1 -type f -name '*.sh')
 }
 
 # Load configuration (only API key, model, and LOG_LEVEL)
-CONFIG_FILE="$SCRIPT_DIR/config.conf"
+CONFIG_FILE="$ENGINE_DIR/config.conf"
 if [[ -f "$CONFIG_FILE" ]]; then
     source "$CONFIG_FILE"
     log_debug "Loaded configuration from: $CONFIG_FILE"
@@ -159,12 +160,12 @@ check_deps() {
 load_module() {
     local module_name
     module_name="$(sanitize_module_name "$1")"
-    local module_path="$SCRIPT_DIR/modules/${module_name}.sh"
+    local module_path="$ENGINE_DIR/modules/${module_name}.sh"
 
     if [[ ! -f "$module_path" ]]; then
         # Attempt a case-insensitive search as a fallback in case the filesystem changed
         local fallback_path
-        fallback_path=$(find "$SCRIPT_DIR/modules" -maxdepth 1 -type f -iname "${module_name}.sh" -print -quit 2>/dev/null || true)
+        fallback_path=$(find "$ENGINE_DIR/modules" -maxdepth 1 -type f -iname "${module_name}.sh" -print -quit 2>/dev/null || true)
 
         if [[ -n "$fallback_path" && -f "$fallback_path" ]]; then
             log_warn "Module $module_name not found with exact name, using $(basename "$fallback_path") instead"
@@ -411,7 +412,7 @@ main() {
     # Create necessary directories
     mkdir -p "$BACKUP_DIR"
     mkdir -p "$(dirname "$SCORE_FILE")"
-    mkdir -p "$SCRIPT_DIR/data"
+    mkdir -p "$ENGINE_DIR/data"
 
     # Ensure all module scripts are executable before running them
     ensure_module_permissions
