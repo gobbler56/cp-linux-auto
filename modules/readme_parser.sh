@@ -2,6 +2,11 @@
 # readme_parser.sh - README parsing module
 # Finds, parses, and extracts structured information from CyberPatriot README files
 
+if [[ -n "${README_PARSER_SH_LOADED:-}" ]]; then
+    return 0
+fi
+declare -gr README_PARSER_SH_LOADED=1
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../lib/utils.sh"
 source "$SCRIPT_DIR/../lib/openrouter.sh"
@@ -39,7 +44,10 @@ find_readme_html() {
 
 # Read and parse README file
 parse_readme() {
-    local readme_path="$1"
+    local readme_path="${1:-}"
+
+    README_PARSED=0
+    README_DATA=""
 
     if [[ -z "$readme_path" ]]; then
         readme_path=$(find_readme_html)
@@ -111,6 +119,19 @@ parse_readme() {
     display_readme_summary "$json_data"
 
     return 0
+}
+
+# Primary entry point for the module
+run_readme_parser() {
+    log_section "README Parser Module"
+
+    if parse_readme "$@"; then
+        log_success "README parsing completed"
+        return 0
+    fi
+
+    log_error "README parsing failed"
+    return 1
 }
 
 # Display summary of parsed README
@@ -286,3 +307,4 @@ export -f get_authorized_users get_authorized_admins get_users_to_create
 export -f get_terminated_users get_critical_services
 export -f is_user_authorized is_user_admin is_user_terminated
 export -f get_groups_to_create get_system_users_to_restrict get_user_groups
+export -f run_readme_parser

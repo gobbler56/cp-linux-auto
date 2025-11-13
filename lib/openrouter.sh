@@ -2,6 +2,13 @@
 # openrouter.sh - OpenRouter API interface for AI-powered README parsing
 # Requires: curl, jq
 
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+    if [[ -n "${OPENROUTER_SH_LOADED:-}" ]]; then
+        return 0
+    fi
+    declare -gr OPENROUTER_SH_LOADED=1
+fi
+
 source "$(dirname "${BASH_SOURCE[0]}")/utils.sh"
 
 # OpenRouter API configuration
