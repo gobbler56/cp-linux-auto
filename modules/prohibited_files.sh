@@ -317,7 +317,7 @@ invoke_prohibited_files_analysis() {
                 {"role": "user", "content": $content}
             ],
             "temperature": 0.0,
-            "max_tokens": 1200
+            "max_tokens": 6000
         }')
 
     local response=$(curl -s -X POST "$OPENROUTER_API_URL" \
