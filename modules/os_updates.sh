@@ -120,7 +120,7 @@ perform_full_upgrade() {
     # Use DEBIAN_FRONTEND to avoid interactive prompts
     export DEBIAN_FRONTEND=noninteractive
 
-    if apt-get -y --with-new-pkgs full-upgrade -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" >/dev/null 2>&1; then
+    if apt-get -y full-upgrade -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" >/dev/null 2>&1; then
         log_success "Full system upgrade completed successfully"
     else
         log_error "System upgrade encountered errors"
