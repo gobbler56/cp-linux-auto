@@ -18,6 +18,19 @@ BACKUP_DIR="${BACKUP_DIR:-/var/backups/cyberpatriot}"
 # All available modules (populated dynamically)
 MODULES=()
 
+# Remove common formatting issues from module identifiers
+sanitize_module_name() {
+    local raw="$1"
+
+    # Strip carriage returns that can show up when archives are extracted on Windows
+    raw="${raw//$'\r'/}"
+
+    # Use sed to trim leading/trailing whitespace without altering interior spacing
+    raw="$(printf '%s' "$raw" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+
+    printf '%s' "$raw"
+}
+
 # Discover modules present in the modules directory
 discover_modules() {
     MODULES=()
@@ -35,6 +48,7 @@ discover_modules() {
     for module_path in "${module_files[@]}"; do
         local module_name
         module_name="$(basename "$module_path" .sh)"
+        module_name="$(sanitize_module_name "$module_name")"
 
         # Skip empty names (just in case)
         if [[ -n "$module_name" ]]; then
@@ -43,6 +57,24 @@ discover_modules() {
     done
 
     return 0
+}
+
+# Ensure module scripts are executable so they can be sourced reliably
+ensure_module_permissions() {
+    if [[ ! -d "$SCRIPT_DIR/modules" ]]; then
+        log_warn "Modules directory not found when ensuring permissions"
+        return
+    fi
+
+    while IFS= read -r module_script; do
+        if [[ -f "$module_script" && ! -x "$module_script" ]]; then
+            if chmod +x "$module_script"; then
+                log_debug "Set executable permission on $(basename "$module_script")"
+            else
+                log_warn "Failed to set executable permission on $module_script"
+            fi
+        fi
+    done < <(find "$SCRIPT_DIR/modules" -maxdepth 1 -type f -name '*.sh')
 }
 
 # Load configuration (only API key, model, and LOG_LEVEL)
@@ -55,7 +87,8 @@ else
     log_warn "Using default settings"
 fi
 
-# Build the module list dynamically
+# Ensure module scripts are ready and build the module list dynamically
+ensure_module_permissions
 if ! discover_modules; then
     log_error "Failed to discover modules"
     exit 1
@@ -124,16 +157,43 @@ check_deps() {
 
 # Load a module
 load_module() {
-    local module_name="$1"
+    local module_name
+    module_name="$(sanitize_module_name "$1")"
     local module_path="$SCRIPT_DIR/modules/${module_name}.sh"
 
     if [[ ! -f "$module_path" ]]; then
-        log_error "Module not found: $module_name"
-        return 1
+        # Attempt a case-insensitive search as a fallback in case the filesystem changed
+        local fallback_path
+        fallback_path=$(find "$SCRIPT_DIR/modules" -maxdepth 1 -type f -iname "${module_name}.sh" -print -quit 2>/dev/null || true)
+
+        if [[ -n "$fallback_path" && -f "$fallback_path" ]]; then
+            log_warn "Module $module_name not found with exact name, using $(basename "$fallback_path") instead"
+            module_path="$fallback_path"
+        else
+            log_error "Module not found: $module_name (looked for $module_path)"
+            return 1
+        fi
     fi
 
     log_debug "Loading module: $module_name"
+    local had_nounset=0
+    if [[ $- == *u* ]]; then
+        had_nounset=1
+        set +u
+    fi
+
+    # shellcheck source=/dev/null
     source "$module_path"
+    local source_status=$?
+
+    if (( had_nounset )); then
+        set -u
+    fi
+
+    if [[ $source_status -ne 0 ]]; then
+        log_error "Failed to load module script: $module_path"
+        return $source_status
+    fi
     return 0
 }
 
@@ -159,8 +219,19 @@ run_module() {
 
     # Run the module
     local start_time=$(date +%s)
+    local had_nounset=0
+    if [[ $- == *u* ]]; then
+        had_nounset=1
+        set +u
+    fi
+
     "run_${module_name}"
     local exit_code=$?
+
+    if (( had_nounset )); then
+        set -u
+    fi
+
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
 
@@ -341,6 +412,9 @@ main() {
     mkdir -p "$BACKUP_DIR"
     mkdir -p "$(dirname "$SCORE_FILE")"
     mkdir -p "$SCRIPT_DIR/data"
+
+    # Ensure all module scripts are executable before running them
+    ensure_module_permissions
 
     # Run based on mode
     case "$mode" in
