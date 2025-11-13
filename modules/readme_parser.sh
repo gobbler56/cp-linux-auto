@@ -13,10 +13,13 @@ source "$SCRIPT_DIR/../lib/openrouter.sh"
 
 # Paths to check for README files
 README_CANDIDATES=(
-    "/opt/aeacus/assets/ReadMe.html"  # Aeacus practice image
-    "/home/*/Desktop/README.html"      # Common location
-    "/root/Desktop/README.html"        # Root desktop
-    "/tmp/README.html"                 # Temporary location
+    "/opt/CyberPatriot/README.html"    # Standard CyberPatriot install path (HTML)
+    "/opt/CyberPatriot/README.desktop" # CyberPatriot desktop shortcut (mixed case)
+    "/opt/cyberpatriot/readme.desktop" # CyberPatriot desktop shortcut (lowercase)
+    "/opt/aeacus/assets/ReadMe.html"   # Aeacus practice image
+    "/home/*/Desktop/README.html"       # Common location
+    "/root/Desktop/README.html"         # Root desktop
+    "/tmp/README.html"                  # Temporary location
 )
 
 # Global variable to store parsed README data
@@ -38,13 +41,54 @@ find_readme_html() {
         done
     done
 
-    log_warn "No README.html file found in standard locations"
+    log_warn "No README file found in standard locations"
     return 1
+}
+
+# If we find a README desktop entry, attempt to download the linked README HTML
+download_readme_from_desktop() {
+    local desktop_file="$1"
+
+    if [[ ! -f "$desktop_file" ]]; then
+        log_error "README desktop entry does not exist: $desktop_file"
+        return 1
+    fi
+
+    log_info "Using README desktop entry: $desktop_file"
+
+    local readme_url
+    readme_url=$(grep -i '^Exec=' "$desktop_file" | head -n1 | sed -E 's/^Exec=.*(https?:[^"[:space:]]+).*/\1/I' || true)
+
+    if [[ -z "$readme_url" ]]; then
+        log_error "Could not extract README URL from desktop entry"
+        return 1
+    fi
+
+    log_info "Downloading README from: $readme_url"
+
+    local data_dir="$SCRIPT_DIR/../data"
+    mkdir -p "$data_dir"
+    local download_path="$data_dir/readme_downloaded.html"
+
+    if ! command -v curl >/dev/null 2>&1; then
+        log_error "curl is required to download the README"
+        return 1
+    fi
+
+    if ! curl -fsSL "$readme_url" -o "$download_path"; then
+        log_error "Failed to download README from $readme_url"
+        return 1
+    fi
+
+    log_info "Saved downloaded README to: $download_path"
+    echo "$download_path"
+    return 0
 }
 
 # Read and parse README file
 parse_readme() {
     local readme_path="${1:-}"
+    local cleanup_download=""
 
     README_PARSED=0
     README_DATA=""
@@ -55,6 +99,14 @@ parse_readme() {
             log_error "Could not find README file"
             return 1
         fi
+    fi
+
+    # If the detected file is a desktop entry, download the actual README HTML
+    if [[ "${readme_path,,}" == *.desktop ]]; then
+        local downloaded_path
+        downloaded_path=$(download_readme_from_desktop "$readme_path") || return 1
+        readme_path="$downloaded_path"
+        cleanup_download="$downloaded_path"
     fi
 
     if [[ ! -f "$readme_path" ]]; then
@@ -117,6 +169,10 @@ parse_readme() {
 
     # Display summary
     display_readme_summary "$json_data"
+
+    if [[ -n "$cleanup_download" ]]; then
+        log_debug "Keeping downloaded README at: $cleanup_download"
+    fi
 
     return 0
 }
