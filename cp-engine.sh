@@ -15,25 +15,35 @@ source "$SCRIPT_DIR/lib/openrouter.sh"
 SCORE_FILE="${SCORE_FILE:-/var/log/cyberpatriot/score.log}"
 BACKUP_DIR="${BACKUP_DIR:-/var/backups/cyberpatriot}"
 
-# All available modules (runs everything by default)
-MODULES=(
-    "dependencies"
-    "readme_parser"
-    "forensics_questions"
-    "user_auditing"
-    "account_policy"
-    "security_policy"
-    "prohibited_files"
-    "malware"
-    "unwanted_software"
-    "ftp_hardening"
-    "ssh_hardening"
-    "os_updates"
-    "service_auditing"
-    "local_policy"
-    "defensive_countermeasures"
-    "os_settings"
-)
+# All available modules (populated dynamically)
+MODULES=()
+
+# Discover modules present in the modules directory
+discover_modules() {
+    MODULES=()
+
+    if [[ ! -d "$SCRIPT_DIR/modules" ]]; then
+        log_error "Modules directory not found: $SCRIPT_DIR/modules"
+        return 1
+    fi
+
+    local module_files=()
+    while IFS= read -r module_file; do
+        module_files+=("$module_file")
+    done < <(find "$SCRIPT_DIR/modules" -maxdepth 1 -type f -name '*.sh' -print | sort)
+
+    for module_path in "${module_files[@]}"; do
+        local module_name
+        module_name="$(basename "$module_path" .sh)"
+
+        # Skip empty names (just in case)
+        if [[ -n "$module_name" ]]; then
+            MODULES+=("$module_name")
+        fi
+    done
+
+    return 0
+}
 
 # Load configuration (only API key, model, and LOG_LEVEL)
 CONFIG_FILE="$SCRIPT_DIR/config.conf"
@@ -43,6 +53,12 @@ if [[ -f "$CONFIG_FILE" ]]; then
 else
     log_warn "Configuration file not found: $CONFIG_FILE"
     log_warn "Using default settings"
+fi
+
+# Build the module list dynamically
+if ! discover_modules; then
+    log_error "Failed to discover modules"
+    exit 1
 fi
 
 # Banner
