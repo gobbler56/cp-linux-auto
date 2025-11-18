@@ -419,7 +419,7 @@ run_prohibited_files() {
                     done
 
                     if [[ -t 0 ]]; then
-                        echo "$parsed_json" | jq -c '.flagged[]' | while IFS= read -r item; do
+                        while IFS= read -r -u 3 item; do
                             local path=$(echo "$item" | jq -r '.path')
                             local category=$(echo "$item" | jq -r '.category // "unknown"')
                             local confidence=$(echo "$item" | jq -r '.confidence // "unknown"')
@@ -452,7 +452,7 @@ run_prohibited_files() {
                                     echo "Please answer 'y' or 'n'."
                                 fi
                             done
-                        done
+                        done 3< <(echo "$parsed_json" | jq -c '.flagged[]')
                     else
                         log_info "Skipping interactive removal prompts (no TTY detected)"
                     fi
