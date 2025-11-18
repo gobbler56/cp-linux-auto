@@ -9,6 +9,93 @@ source "$SCRIPT_DIR/../lib/utils.sh"
 # Category: Operating System Updates
 # Description: Ensures OS and kernel are up to date, installs and configures automatic updates
 
+# Fix APT sources - assumes broken and fixes without checking
+fix_apt_sources() {
+    log_section "Fixing APT Sources"
+
+    local os=$(detect_os)
+    local version=$(detect_os_version)
+
+    log_info "Detected OS: $os $version"
+
+    # Determine if Ubuntu 24 or Mint 21
+    if [[ "$os" == "linuxmint" && "$version" == "21"* ]]; then
+        log_info "Configuring APT sources for Linux Mint 21..."
+
+        # Backup existing files
+        [[ -f /etc/apt/sources.list.d/official-package-repositories.list ]] && \
+            backup_file /etc/apt/sources.list.d/official-package-repositories.list
+        [[ -f /etc/apt/sources.list ]] && \
+            backup_file /etc/apt/sources.list
+
+        # Write Mint 21 sources to official-package-repositories.list
+        log_info "Writing Mint 21 sources to official-package-repositories.list..."
+        cat <<'EOF' | tee /etc/apt/sources.list.d/official-package-repositories.list >/dev/null
+deb http://packages.linuxmint.com virginia main upstream import backport
+
+deb http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse
+deb http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse
+deb http://archive.ubuntu.com/ubuntu jammy-backports main restricted universe multiverse
+
+deb http://security.ubuntu.com/ubuntu/ jammy-security main restricted universe multiverse
+EOF
+
+        # Write Mint 21 sources to sources.list
+        log_info "Writing Mint 21 sources to sources.list..."
+        cat <<'EOF' | tee /etc/apt/sources.list >/dev/null
+deb http://packages.linuxmint.com virginia main upstream import backport
+
+deb http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse
+deb http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse
+deb http://archive.ubuntu.com/ubuntu jammy-backports main restricted universe multiverse
+
+deb http://security.ubuntu.com/ubuntu/ jammy-security main restricted universe multiverse
+EOF
+
+        log_success "Linux Mint 21 APT sources configured successfully"
+
+    elif [[ "$os" == "ubuntu" && "$version" == "24."* ]]; then
+        log_info "Configuring APT sources for Ubuntu 24..."
+
+        # Backup existing files
+        [[ -f /etc/apt/sources.list.d/ubuntu.sources ]] && \
+            backup_file /etc/apt/sources.list.d/ubuntu.sources
+        [[ -f /etc/apt/sources.list ]] && \
+            backup_file /etc/apt/sources.list
+
+        # Get the codename dynamically
+        local codename=$(lsb_release -cs)
+        log_info "Using Ubuntu codename: $codename"
+
+        # Write Ubuntu sources to ubuntu.sources
+        log_info "Writing Ubuntu sources to ubuntu.sources..."
+        cat <<EOF | tee /etc/apt/sources.list.d/ubuntu.sources >/dev/null
+deb http://archive.ubuntu.com/ubuntu $codename main restricted universe multiverse
+deb http://archive.ubuntu.com/ubuntu $codename-updates main restricted universe multiverse
+deb http://archive.ubuntu.com/ubuntu $codename-security main restricted universe multiverse
+deb http://archive.ubuntu.com/ubuntu $codename-backports main universe restricted multiverse
+EOF
+
+        # Write Ubuntu sources to sources.list
+        log_info "Writing Ubuntu sources to sources.list..."
+        cat <<EOF | tee /etc/apt/sources.list >/dev/null
+deb http://archive.ubuntu.com/ubuntu $codename main restricted universe multiverse
+deb http://archive.ubuntu.com/ubuntu $codename-updates main restricted universe multiverse
+deb http://archive.ubuntu.com/ubuntu $codename-security main restricted universe multiverse
+deb http://archive.ubuntu.com/ubuntu $codename-backports main universe restricted multiverse
+EOF
+
+        log_success "Ubuntu 24 APT sources configured successfully"
+
+    else
+        log_error "Unsupported OS: $os $version"
+        log_error "This module only supports Ubuntu 24.x and Linux Mint 21.x"
+        return 1
+    fi
+
+    return 0
+}
+
 # Update package lists
 update_package_lists() {
     log_section "Updating Package Lists"
@@ -196,7 +283,13 @@ display_update_summary() {
 run_os_updates() {
     log_info "Starting OS Updates module..."
 
-    # Update package lists first
+    # Fix APT sources first (assume broken)
+    if ! fix_apt_sources; then
+        log_error "Failed to fix APT sources"
+        return 1
+    fi
+
+    # Update package lists
     if ! update_package_lists; then
         log_error "Cannot proceed without updated package lists"
         return 1
