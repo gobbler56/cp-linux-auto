@@ -329,6 +329,7 @@ disable_null_passwords() {
     local modified=0
 
     # Remove nullok and nullok_secure from all PAM files
+    # This now runs *after* pam-auth-update, so it will clean up common-auth
     for pam_file in /etc/pam.d/common-auth /etc/pam.d/common-password /etc/pam.d/login /etc/pam.d/sshd; do
         if [[ -f "$pam_file" ]] && grep -q "nullok" "$pam_file"; then
             backup_file "$pam_file"
@@ -398,9 +399,9 @@ lock_root_account_if_blank() {
     return 0
 }
 
-# 33: Configure account lockout policy with faillock
+# 33: Configure account lockout policy with faillock (pam-auth-update method)
 configure_account_lockout() {
-    log_section "Configuring Account Lockout Policy"
+    log_section "Configuring Account Lockout Policy (pam-auth-update method)"
 
     # Ensure pam_faillock is available
     if ! pam_module_exists "pam_faillock.so"; then
@@ -408,101 +409,56 @@ configure_account_lockout() {
         return 1
     fi
 
-    local auth_file="/etc/pam.d/common-auth"
-    local account_file="/etc/pam.d/common-account"
-    local faillock_conf="/etc/security/faillock.conf"
+    # 1. Create pam-config profiles
+    local pam_config_dir="/usr/share/pam-configs"
+    mkdir -p "$pam_config_dir"
 
-    [[ ! -f "$auth_file" ]] && { log_error "$auth_file not found"; return 1; }
-    [[ ! -f "$account_file" ]] && { log_error "$account_file not found"; return 1; }
-
-    backup_file "$auth_file"
-    backup_file "$account_file"
-
-    # Configure /etc/pam.d/common-auth with proper faillock structure
-    # Only rebuild if not already configured correctly
-    if ! grep -q "pam_faillock.so preauth" "$auth_file" || ! grep -q "pam_faillock.so authfail" "$auth_file"; then
-        log_info "Configuring common-auth with faillock..."
-
-        # Create new common-auth content
-        cat > "$auth_file" <<'EOF'
-#
-# /etc/pam.d/common-auth - authentication settings common to all services
-#
-# This file is included from other service-specific PAM config files,
-# and should contain a list of the authentication modules that define
-# the central authentication scheme for use on the system
-# (e.g., /etc/shadow, LDAP, Kerberos, etc.).  The default is to use the
-# traditional Unix authentication mechanisms.
-#
-# here are the per-package modules (the "Primary" block)
-auth    required                        pam_faillock.so preauth
-auth    [success=1 default=ignore]      pam_unix.so
-# here's the fallback if no module succeeds
-auth    [default=die]                   pam_faillock.so authfail
-auth    requisite                       pam_deny.so
-# prime the stack with a positive return value if there isn't one already;
-# this avoids us returning an error just because nothing sets a success code
-# since the modules above will each just jump around
-auth    required                        pam_permit.so
-# and here are more per-package modules (the "Additional" block)
-auth    optional                        pam_cap.so
+    log_info "Creating pam-config profile: faillock_notify"
+    tee "$pam_config_dir/faillock_notify" >/dev/null <<'EOF'
+Name: Notify on account lockout
+Default: no
+Priority: 1024
+Auth-Type: Primary
+Auth:
+    requisite                       pam_faillock.so preauth
 EOF
-        log_success "Configured common-auth with faillock preauth and authfail"
+
+    log_info "Creating pam-config profile: faillock_reset"
+    tee "$pam_config_dir/faillock_reset" >/dev/null <<'EOF'
+Name: Reset lockout on success
+Default: no
+Priority: 0
+Auth-Type: Additional
+Auth:
+    required                        pam_faillock.so authsucc
+EOF
+
+    log_info "Creating pam-config profile: faillock"
+    tee "$pam_config_dir/faillock" >/dev/null <<'EOF'
+Name: Lockout on failed logins
+Default: no
+Priority: 0
+Auth-Type: Primary
+Auth:
+    [default=die]                   pam_faillock.so authfail
+EOF
+
+    # 2. Enable profiles using pam-auth-update non-interactively
+    log_info "Enabling faillock profiles with pam-auth-update..."
+    if pam-auth-update --enable faillock faillock_reset faillock_notify --force; then
+        log_success "Successfully enabled faillock profiles via pam-auth-update"
     else
-        log_info "common-auth already has faillock configured"
+        log_error "pam-auth-update command failed!"
+        return 1
     fi
-
-    # Configure /etc/pam.d/common-account to add faillock
-    if ! grep -q "pam_faillock.so" "$account_file"; then
-        log_info "Adding faillock to common-account..."
-
-        # Read the file and insert after the comment block
-        local temp_file=$(mktemp)
-        local inserted=0
-        while IFS= read -r line; do
-            echo "$line" >> "$temp_file"
-            # After we see the comment block ending, insert faillock
-            if [[ "$line" =~ ^#.*common-account && $inserted -eq 0 ]]; then
-                # Read until we find the end of comments
-                while IFS= read -r nextline; do
-                    echo "$nextline" >> "$temp_file"
-                    if [[ ! "$nextline" =~ ^# && -n "$nextline" ]]; then
-                        # Found first non-comment line, insert before it
-                        echo "account required                        pam_faillock.so" >> "$temp_file"
-                        inserted=1
-                        break
-                    elif [[ -z "$nextline" ]]; then
-                        # Empty line after comments, insert here
-                        echo "account required                        pam_faillock.so" >> "$temp_file"
-                        inserted=1
-                        break
-                    fi
-                done
-            fi
-        done < "$account_file"
-
-        # If we haven't inserted yet, add at line 2
-        if [[ $inserted -eq 0 ]]; then
-            head -n 1 "$account_file" > "$temp_file"
-            echo "account required                        pam_faillock.so" >> "$temp_file"
-            tail -n +2 "$account_file" >> "$temp_file"
-        fi
-
-        mv "$temp_file" "$account_file"
-        chmod 644 "$account_file"
-        log_success "Added faillock to common-account"
-    else
-        log_info "common-account already has faillock configured"
-    fi
-
-    # Configure /etc/security/faillock.conf
+    
+    # 3. Configure /etc/security/faillock.conf
+    local faillock_conf="/etc/security/faillock.conf"
     if [[ -f "$faillock_conf" ]]; then
         backup_file "$faillock_conf"
     fi
 
-    log_info "Configuring faillock.conf..."
-
-    # Create or update faillock.conf with explicit settings
+    log_info "Configuring $faillock_conf..."
     cat > "$faillock_conf" <<EOF
 # CyberPatriot - Account Lockout Configuration
 # Lock account after failed login attempts
@@ -526,6 +482,7 @@ EOF
     log_info "  - Lock duration: $DEFAULT_LOCK_TIME seconds ($((DEFAULT_LOCK_TIME/60)) minutes)"
     log_info "  - Failure interval: $DEFAULT_LOCK_INTERVAL seconds ($((DEFAULT_LOCK_INTERVAL/60)) minutes)"
     log_info "  - Enforcement applies to root as well"
+    log_info "  - Using pam-auth-update (faillock, faillock_reset, faillock_notify)"
 
     return 0
 }
@@ -604,7 +561,7 @@ EOF
                     if grep -q "^\[greeter\]" "$gdm_conf"; then
                         sed -i "/^\[greeter\]/a disable-user-list=true" "$gdm_conf"
                     else
-                        echo -e "\n[greeter]\ndisable-user-list=true" >> "$gdm_conf"
+                        echo -e "\n[greeter]\ndisable-user-list=true" >> "$gD'M_conf"
                     fi
                     log_success "Updated GDM3 custom.conf"
                 fi
@@ -683,16 +640,28 @@ run_account_policy() {
     # Ensure running as root
     require_root
 
-    # Run all policy configuration functions
+    # Run non-PAM or non-conflicting configs first
     configure_login_defs              # Items 23, 24
-    configure_pwquality               # Items 26, 27, 28, 29
-    enable_pwquality_pam              # Enable pwquality in PAM
-    configure_password_history        # Item 25
-    configure_password_hashing        # Item 30
-    disable_null_passwords            # Items 31, 32
+    configure_pwquality               # Items 26, 27, 28, 29 (sets up /etc/security/pwquality.conf)
     lock_root_account_if_blank        # Item 35
-    configure_account_lockout         # Item 33
     disable_user_enumeration          # Item 34
+
+    # --- PAM Configuration Block ---
+    # Run pam-auth-update (faillock) FIRST to establish the PAM baseline
+    # This regenerates common-auth and common-account
+    configure_account_lockout         # Item 33 (NEW VERSION)
+
+    # Now, apply all direct PAM edits on top of the new baseline
+    # These functions primarily edit common-password, which is less
+    # likely to be overwritten by the faillock update, but this
+    # is the safest order.
+    enable_pwquality_pam              # Enable pwquality in /etc/pam.d/common-password
+    configure_password_history        # Item 25 (edits /etc/pam.d/common-password)
+    configure_password_hashing        # Item 30 (edits /etc/pam.d/common-password)
+    
+    # Run disable_null_passwords LAST to ensure nullok is removed
+    # from the newly regenerated common-auth and from common-password.
+    disable_null_passwords            # Items 31, 32 (edits common-auth, common-password)
 
     # Verify that we didn't break PAM
     if ! verify_pam_integrity; then
