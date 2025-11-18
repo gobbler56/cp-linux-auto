@@ -6,17 +6,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../lib/utils.sh"
 source "$SCRIPT_DIR/../lib/openrouter.sh"
 
-# System prompt for the OpenRouter-powered forensic assistant
-readonly FORENSICS_SYSTEM_PROMPT='You are a CyberPatriot Linux forensic analyst. Analyze the provided forensic question files and craft clear, concise answers that students can enter into the scoring report. When needed you may request safe, read-only shell commands to gather extra evidence (allowed commands: cat, ls, grep, find, strings, head, tail, sed, awk, wc, stat). Request only what is necessary. Always respond with valid JSON in the exact format:
+readonly FORENSICS_SYSTEM_PROMPT='You are a CyberPatriot Linux forensic analyst. Analyze the provided forensic question files and craft clear, concise answers that students can enter into the scoring report. When needed you may request safe, read-only shell commands to gather extra evidence, but combine them into a single consolidated request whenever possible and avoid unnecessary steps. Always respond with valid JSON in the exact format:
 {
   "answers": [
     {"number": 1, "answers": ["Answer text"], "explanation": "(optional short reasoning)", "needs_manual_review": false}
   ],
   "command_requests": [
-    {"command": "cat /path", "reason": "Why the command is needed"}
+    {"command": "cat /path && strings /file", "reason": "Why the consolidated command is needed"}
   ]
 }
-Use an array for answers even when there is only one. Set needs_manual_review to true if you are not confident. Omit command_requests or return an empty array when no additional data is required. After receiving command output, provide final answers and avoid asking for more commands.'
+Use an array for answers even when there is only one. Set needs_manual_review to true if you are not confident. Omit command_requests or return an empty array when no additional data is required. Provide a complete set of command requests in a single step whenever feasible, and you have at most three total exchanges to finish the task. After receiving command output, provide final answers and avoid asking for more commands.'
 
 # Discover forensic question files on user desktops
 discover_forensics_questions() {
@@ -120,21 +119,37 @@ call_forensics_openrouter() {
 # Validate that the requested command is safe to execute
 is_safe_forensics_command() {
     local command="$1"
-    local disallowed_chars='[;&`$><]'
-    if [[ "$command" =~ $disallowed_chars || "$command" == *"||"* || "$command" == *"&&"* ]]; then
+    local disallowed_chars='[;`$><|]'
+
+    if [[ "$command" =~ $disallowed_chars ]]; then
         return 1
     fi
 
-    local first_word
-    first_word=$(awk '{print $1}' <<<"$command")
-    case "$first_word" in
-        cat|ls|grep|find|strings|head|tail|sed|awk|wc|stat)
-            return 0
-            ;;
-        *)
-            return 1
-            ;;
-    esac
+    if [[ "$command" =~ (^|[^&])&($|[^&]) ]]; then
+        return 1
+    fi
+
+    IFS='&&' read -r -a segments <<<"$command"
+    if (( ${#segments[@]} == 0 )); then
+        return 1
+    fi
+
+    for segment in "${segments[@]}"; do
+        segment=$(xargs <<<"$segment")
+        [[ -z "$segment" ]] && return 1
+
+        local first_word
+        first_word=$(awk '{print $1}' <<<"$segment")
+        case "$first_word" in
+            cat|ls|grep|find|strings|head|tail|sed|awk|wc|stat)
+                ;;
+            *)
+                return 1
+                ;;
+        esac
+    done
+
+    return 0
 }
 
 # Normalize command requests into a JSON array
@@ -257,6 +272,7 @@ execute_forensics_command() {
 # Handle AI interaction workflow and return the final JSON payload of answers
 obtain_forensics_answers() {
     local questions_json="$1"
+    local label="${2:-all}"
 
     if ! check_openrouter_config; then
         return 1
@@ -279,22 +295,31 @@ obtain_forensics_answers() {
             {"role": "user", "content": $user}
         ]')
 
-    local initial_content
-    initial_content=$(call_forensics_openrouter "$messages") || return 1
+    local round=1
+    local max_rounds=3
 
     mkdir -p "$SCRIPT_DIR/../data"
-    echo "$initial_content" > "$SCRIPT_DIR/../data/forensics_ai_initial.txt"
 
-    local parsed_initial
-    parsed_initial=$(extract_json_from_response "$initial_content") || {
-        log_error "Failed to parse AI response for forensics questions"
-        return 1
-    }
+    while (( round <= max_rounds )); do
+        local content
+        content=$(call_forensics_openrouter "$messages") || return 1
 
-    local command_requests
-    command_requests=$(extract_forensics_command_requests "$parsed_initial")
+        echo "$content" > "$SCRIPT_DIR/../data/forensics_ai_round${round}_${label}.txt"
 
-    if [[ "$command_requests" != "[]" ]]; then
+        local parsed
+        parsed=$(extract_json_from_response "$content") || {
+            log_error "Failed to parse AI response for forensics questions"
+            return 1
+        }
+
+        local command_requests
+        command_requests=$(extract_forensics_command_requests "$parsed")
+
+        if [[ "$command_requests" == "[]" || $round -eq $max_rounds ]]; then
+            echo "$parsed"
+            return 0
+        fi
+
         local command_results=()
         local index=0
 
@@ -319,41 +344,29 @@ obtain_forensics_answers() {
 
         local command_results_json
         command_results_json=$(printf '%s\n' "${command_results[@]}" | jq -s '.')
-        echo "$command_results_json" | jq '.' > "$SCRIPT_DIR/../data/forensics_ai_command_result.json"
+        echo "$command_results_json" | jq '.' > "$SCRIPT_DIR/../data/forensics_ai_command_result_${label}_round${round}.json"
 
         local followup_user
         followup_user=$(jq -n \
             --argjson command_results "$command_results_json" \
             --argjson questions "$questions_json" \
+            --arg summary "Use these command outputs to finalize answers. If absolutely necessary, provide a single consolidated command request; otherwise, deliver final answers now." \
             '{
                 task: "Provide final answers using the supplied command outputs.",
                 command_results: $command_results,
-                questions: $questions
+                questions: $questions,
+                guidance: $summary
             }' | jq -c '.')
 
-        local followup_messages
-        followup_messages=$(jq -n \
-            --arg system "$FORENSICS_SYSTEM_PROMPT" \
-            --arg user1 "$user_message" \
-            --arg assistant1 "$initial_content" \
-            --arg user2 "$followup_user" \
-            '[
-                {"role": "system", "content": $system},
-                {"role": "user", "content": $user1},
-                {"role": "assistant", "content": $assistant1},
-                {"role": "user", "content": $user2}
-            ]')
+        messages=$(echo "$messages" | jq \
+            --arg assistant "$content" \
+            --arg user "$followup_user" \
+            '. + [ {"role": "assistant", "content": $assistant}, {"role": "user", "content": $user} ]')
 
-        local followup_content
-        followup_content=$(call_forensics_openrouter "$followup_messages") || return 1
-        echo "$followup_content" > "$SCRIPT_DIR/../data/forensics_ai_followup.txt"
+        round=$((round + 1))
+    done
 
-        extract_json_from_response "$followup_content"
-        return $?
-    else
-        echo "$parsed_initial"
-        return 0
-    fi
+    return 0
 }
 
 # Module: Forensics Questions
@@ -386,42 +399,69 @@ run_forensics_questions() {
     log_section "Forensics Questions"
     echo "$questions_json" | jq -r '.[] | "Question \(.number) (\(.path)):\n\(.content)\n"'
 
-    local answers_json=""
     if check_openrouter_config; then
         log_info "Submitting forensic questions to AI assistant..."
-        answers_json=$(obtain_forensics_answers "$questions_json") || {
-            log_warn "AI-assisted analysis failed; displaying questions only"
-            answers_json=""
-        }
+
+        local tmp_answer_dir
+        tmp_answer_dir=$(mktemp -d)
+
+        while IFS= read -r question_entry; do
+            (
+                local number
+                number=$(echo "$question_entry" | jq -r '.number')
+                local question_wrapper
+                question_wrapper=$(jq -n --argjson q "$question_entry" '[ $q ]')
+
+                local answer_payload
+                answer_payload=$(obtain_forensics_answers "$question_wrapper" "q${number}") || answer_payload=""
+
+                if [[ -n "$answer_payload" ]]; then
+                    echo "$answer_payload" > "$tmp_answer_dir/answers_${number}.json"
+                else
+                    log_warn "No AI answers returned for Question $number"
+                fi
+            ) &
+        done < <(echo "$questions_json" | jq -c '.[]')
+
+        wait
+
+        shopt -s nullglob
+        local answer_files=("$tmp_answer_dir"/answers_*.json)
+        shopt -u nullglob
+
+        if (( ${#answer_files[@]} > 0 )); then
+            local answers_json
+            answers_json=$(jq -s '{answers: map(.answers[]) }' "${answer_files[@]}")
+
+            echo "$answers_json" | jq '.' > "$SCRIPT_DIR/../data/forensics_answers.json"
+
+            if echo "$answers_json" | jq -e '.answers and (.answers | type == "array")' >/dev/null 2>&1; then
+                log_section "Forensics Answers"
+                echo "$answers_json" | jq -r '
+                    .answers[] |
+                    "Question \(.number): " +
+                    (if has("answers") then
+                        (if (.answers | type == "array") then (.answers | join(" | ")) else (.answers | tostring) end)
+                     else
+                        (.answer // "")
+                     end) +
+                    (if (.needs_manual_review // false) then " (manual review requested)" else "" end)
+                '
+                if echo "$answers_json" | jq -e '.answers[] | select(has("explanation"))' >/dev/null 2>&1; then
+                    echo
+                    echo "$answers_json" | jq -r '.answers[] | select(has("explanation")) | "Q\(.number) Explanation: \(.explanation)"'
+                fi
+                write_forensics_answers "$questions_json" "$answers_json"
+                log_success "Module forensics_questions completed successfully"
+                return 0
+            else
+                log_warn "AI response did not include an answers array"
+            fi
+        else
+            log_warn "No AI responses were generated for the forensic questions"
+        fi
     else
         log_warn "OpenRouter API key not configured; skipping AI-assisted answers"
-    fi
-
-    if [[ -n "$answers_json" ]]; then
-        echo "$answers_json" | jq '.' > "$SCRIPT_DIR/../data/forensics_answers.json"
-
-        if echo "$answers_json" | jq -e '.answers and (.answers | type == "array")' >/dev/null 2>&1; then
-            log_section "Forensics Answers"
-            echo "$answers_json" | jq -r '
-                .answers[] |
-                "Question \(.number): " +
-                (if has("answers") then
-                    (if (.answers | type == "array") then (.answers | join(" | ")) else (.answers | tostring) end)
-                 else
-                    (.answer // "")
-                 end) +
-                (if (.needs_manual_review // false) then " (manual review requested)" else "" end)
-            '
-            if echo "$answers_json" | jq -e '.answers[] | select(has("explanation"))' >/dev/null 2>&1; then
-                echo
-                echo "$answers_json" | jq -r '.answers[] | select(has("explanation")) | "Q\(.number) Explanation: \(.explanation)"'
-            fi
-            write_forensics_answers "$questions_json" "$answers_json"
-            log_success "Module forensics_questions completed successfully"
-            return 0
-        else
-            log_warn "AI response did not include an answers array"
-        fi
     fi
 
     log_info "Manual review of forensic questions may still be required"
