@@ -283,6 +283,29 @@ display_update_summary() {
 run_os_updates() {
     log_info "Starting OS Updates module..."
 
+    log_section "Choose Update Mode"
+    log_info "1) Fix APT and configure automatic updates"
+    log_info "2) Full run (includes full upgrade) [default]"
+    read -r -p "Select update mode [1/2]: " update_choice
+
+    # Default to option 2 (full run) if no choice provided
+    if [[ -z "$update_choice" ]]; then
+        update_choice=2
+    fi
+
+    case "$update_choice" in
+        1)
+            log_info "Running APT repair and auto-update configuration only"
+            ;;
+        2)
+            log_info "Running full OS update flow"
+            ;;
+        *)
+            log_warn "Unrecognized choice '$update_choice', defaulting to full OS update"
+            update_choice=2
+            ;;
+    esac
+
     # Fix APT sources first (assume broken)
     if ! fix_apt_sources; then
         log_error "Failed to fix APT sources"
@@ -304,14 +327,18 @@ run_os_updates() {
     # Enable systemd timers for automatic updates
     enable_auto_update_timers
 
-    # Perform full system upgrade
-    perform_full_upgrade
+    if [[ "$update_choice" == "1" ]]; then
+        log_warn "Skipping full system upgrade per user selection"
+    else
+        # Perform full system upgrade
+        perform_full_upgrade
 
-    # Clean up unnecessary packages
-    autoremove_packages
+        # Clean up unnecessary packages
+        autoremove_packages
 
-    # Check if reboot is needed (after kernel updates)
-    check_reboot_required
+        # Check if reboot is needed (after kernel updates)
+        check_reboot_required
+    fi
 
     # Display summary
     display_update_summary
