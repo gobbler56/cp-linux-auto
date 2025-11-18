@@ -200,23 +200,39 @@ verify_ufw_status() {
 run_defensive_countermeasures() {
     log_info "Starting Defensive Countermeasures module..."
 
+    # Prevent errexit from terminating the interactive engine if a single UFW command fails
+    local had_errexit=0
+    if [[ $- == *e* ]]; then
+        had_errexit=1
+        set +e
+    fi
+
+    local status=0
+
     # Ensure UFW is installed
     if ! ensure_ufw_installed; then
         log_error "Cannot proceed without UFW installed"
-        return 1
+        status=1
+    else
+        # Configure UFW step by step
+        configure_ufw_defaults
+        configure_loopback
+        enable_ufw_logging
+        configure_ipv6_parity
+        configure_ssh_rate_limit
+        enable_ufw
+        verify_ufw_status
     fi
 
-    # Configure UFW step by step
-    configure_ufw_defaults
-    configure_loopback
-    enable_ufw_logging
-    configure_ipv6_parity
-    configure_ssh_rate_limit
-    enable_ufw
-    verify_ufw_status
+    if (( had_errexit )); then
+        set -e
+    fi
 
-    log_success "Defensive Countermeasures module completed"
-    return 0
+    if [[ $status -eq 0 ]]; then
+        log_success "Defensive Countermeasures module completed"
+    fi
+
+    return $status
 }
 
 export -f run_defensive_countermeasures
