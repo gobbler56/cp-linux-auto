@@ -29,8 +29,12 @@ readonly REQUIRED_PACKAGES=(
 # Services that should ALWAYS be stopped/disabled (regardless of README)
 # Note: FTP and web servers removed - they will be handled dynamically based on README
 readonly ALWAYS_STOP_SERVICES=(
+    # Printing services
     "cups"
     "cups-browsed"
+    # Network discovery/mDNS
+    "avahi-daemon"
+    "avahi"
     # Torrent clients
     "deluged"
     "deluge-web"
@@ -42,6 +46,11 @@ readonly ALWAYS_STOP_SERVICES=(
     "telnetd"
     "inetd"
     "xinetd"
+    # Bluetooth (often unnecessary in competitions)
+    "bluetooth"
+    # SNMP (rarely needed, security risk)
+    "snmpd"
+    "snmp"
 )
 
 # System prompt for AI service analysis
@@ -353,7 +362,7 @@ Please analyze these services and recommend which ones should be stopped/disable
 apply_service_recommendations() {
     local recommendations="$1"
 
-    log_section "Applying AI Service Recommendations"
+    log_section "AI Service Analysis Results"
 
     # Save recommendations to file
     mkdir -p "$SCRIPT_DIR/../data"
@@ -361,6 +370,7 @@ apply_service_recommendations() {
     log_info "Saved recommendations to: $SCRIPT_DIR/../data/service_recommendations.json"
 
     # Display what will be kept
+    echo ""
     log_info "Services recommended to KEEP running:"
     local keep_count=$(echo "$recommendations" | jq '.services_to_keep | length')
     if [[ $keep_count -gt 0 ]]; then
@@ -373,7 +383,7 @@ apply_service_recommendations() {
 
     echo ""
 
-    # Apply stop recommendations
+    # Display stop recommendations
     log_info "Services recommended to STOP:"
     local stop_count=$(echo "$recommendations" | jq '.services_to_stop | length')
 
@@ -382,8 +392,16 @@ apply_service_recommendations() {
         return 0
     fi
 
-    local stopped_count=0
+    # Show what will be stopped
+    echo "$recommendations" | jq -r '.services_to_stop[] | "  - \(.name): \(.reason)"' | while read line; do
+        log_warn "$line"
+    done
 
+    echo ""
+    log_info "Stopping and disabling recommended services..."
+
+    # Apply stop recommendations
+    local stopped_count=0
     echo "$recommendations" | jq -r '.services_to_stop[] | "\(.name)|\(.reason)"' | while IFS='|' read -r service reason; do
         log_info "Processing: $service"
         log_debug "Reason: $reason"
@@ -399,6 +417,13 @@ apply_service_recommendations() {
 # Main service auditing function
 run_service_auditing() {
     log_section "Service Auditing Module"
+
+    # Ensure BACKUP_DIR is set
+    if [[ -z "${BACKUP_DIR:-}" ]]; then
+        BACKUP_DIR="/var/backups/cyberpatriot"
+        log_warn "BACKUP_DIR not set, using default: $BACKUP_DIR"
+    fi
+    mkdir -p "$BACKUP_DIR"
 
     # Install required packages
     install_required_packages
@@ -418,7 +443,7 @@ run_service_auditing() {
 
     # Get critical services from README
     local critical_services=""
-    if [[ $README_PARSED -eq 1 ]]; then
+    if [[ "${README_PARSED:-0}" -eq 1 ]]; then
         log_info "Retrieving critical services from README..."
         critical_services=$(get_critical_services 2>/dev/null || echo "")
 
@@ -438,13 +463,17 @@ run_service_auditing() {
     fi
 
     # Get AI recommendations
+    log_info "Requesting AI analysis from OpenRouter..."
     local recommendations=$(get_service_recommendations "$running_services" "$critical_services")
 
     if [[ $? -ne 0 || -z "$recommendations" ]]; then
         log_error "Failed to get AI service recommendations"
         log_warn "Service auditing completed with hardcoded rules only"
+        log_warn "Make sure OpenRouter API key is configured in config.conf"
         return 1
     fi
+
+    log_success "AI analysis completed successfully"
 
     # Apply recommendations
     apply_service_recommendations "$recommendations"
