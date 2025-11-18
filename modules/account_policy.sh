@@ -11,13 +11,13 @@ source "$SCRIPT_DIR/../lib/utils.sh"
 
 # Configuration defaults
 readonly DEFAULT_PASS_MAX_DAYS=90
-readonly DEFAULT_PASS_MIN_DAYS=1
+readonly DEFAULT_PASS_MIN_DAYS=7
 readonly DEFAULT_PASS_WARN_AGE=7
 readonly DEFAULT_PW_REMEMBER=5
 readonly DEFAULT_PW_MINLEN=14
 readonly DEFAULT_PW_MINCLASS=4
 readonly DEFAULT_PW_DIFOK=8
-readonly DEFAULT_PW_MAXREPEAT=3
+readonly DEFAULT_PW_MAXREPEAT=5
 readonly DEFAULT_PW_MAXCLASSREPEAT=3
 readonly DEFAULT_PW_RETRY=3
 readonly DEFAULT_LOCK_DENY=5
@@ -201,9 +201,11 @@ enable_pwquality_pam() {
     local pwq_numeric_opts=(
         "minlen=$DEFAULT_PW_MINLEN"
         "minclass=$DEFAULT_PW_MINCLASS"
-        "difok=$DEFAULT_PW_DIFOK"
         "maxrepeat=$DEFAULT_PW_MAXREPEAT"
-        "maxclassrepeat=$DEFAULT_PW_MAXCLASSREPEAT"
+        "dcredit=-1"
+        "ucredit=-1"
+        "ocredit=-1"
+        "lcredit=-1"
     )
 
     local opt key value
@@ -216,16 +218,17 @@ enable_pwquality_pam() {
         fi
     done
 
-    # Boolean-style options
+    # Boolean-style options (and numeric-only options that don't need '=')
     local pwq_bool_opts=(
-        "gecoscheck"
-        "reject_username"
+        "gecoscheck=1"
+        "dictcheck=1"
         "enforce_for_root"
-        "usercheck"
     )
 
     for opt in "${pwq_bool_opts[@]}"; do
-        if ! grep -Eq "pam_pwquality\\.so[^#]*\\b${opt}\\b" "$pam_file"; then
+        # Extract the key for checking
+        local check_key="${opt%%=*}"
+        if ! grep -Eq "pam_pwquality\\.so[^#]*\\b${check_key}" "$pam_file"; then
             sed -i -E "s/(pam_pwquality\\.so[^#]*)/\\1 ${opt}/" "$pam_file"
             log_success "Added pam_pwquality option: ${opt}"
         fi
@@ -392,68 +395,9 @@ configure_account_lockout() {
         return 1
     fi
 
-    if command -v pam-auth-update >/dev/null 2>&1; then
-        local config_dir="/usr/share/pam-configs"
-        mkdir -p "$config_dir"
-
-        local faillock_config="$config_dir/faillock"
-        cat > "$faillock_config" <<EOF
-Name: Lockout on failed logins
-Default: no
-Priority: 0
-Auth-Type: Primary
-Auth:
-[default=die] pam_faillock.so authfail deny=$DEFAULT_LOCK_DENY unlock_time=$DEFAULT_LOCK_TIME fail_interval=$DEFAULT_LOCK_INTERVAL
-Account-Type: Additional
-Account:
-required pam_faillock.so
-EOF
-        log_success "Configured faillock profile: $faillock_config"
-
-        local faillock_reset_config="$config_dir/faillock_reset"
-        cat > "$faillock_reset_config" <<EOF
-Name: Reset lockout on success
-Default: no
-Priority: 0
-Auth-Type: Additional
-Auth:
-required pam_faillock.so authsucc
-EOF
-        log_success "Configured faillock profile: $faillock_reset_config"
-
-        local faillock_notify_config="$config_dir/faillock_notify"
-        cat > "$faillock_notify_config" <<EOF
-Name: Notify on account lockout
-Default: no
-Priority: 1024
-Auth-Type: Primary
-Auth:
-requisite pam_faillock.so preauth silent deny=$DEFAULT_LOCK_DENY unlock_time=$DEFAULT_LOCK_TIME fail_interval=$DEFAULT_LOCK_INTERVAL
-EOF
-        log_success "Configured faillock profile: $faillock_notify_config"
-
-        # Update PAM stack using pam-auth-update
-        if DEBIAN_FRONTEND=noninteractive pam-auth-update --package >/dev/null 2>&1; then
-            log_info "Registered faillock PAM profiles"
-        fi
-
-        if DEBIAN_FRONTEND=noninteractive pam-auth-update --enable faillock --enable faillock_reset --enable faillock_notify --force >/dev/null 2>&1; then
-            log_success "Enabled faillock PAM profiles via pam-auth-update"
-            log_success "Account lockout policy configured:"
-            log_info "  - Lock after $DEFAULT_LOCK_DENY failed attempts"
-            log_info "  - Lock duration: $DEFAULT_LOCK_TIME seconds"
-            log_info "  - Failure interval: $DEFAULT_LOCK_INTERVAL seconds"
-            return 0
-        else
-            log_warn "pam-auth-update failed to enable faillock profiles, falling back to manual configuration"
-        fi
-    else
-        log_warn "pam-auth-update not available, applying faillock configuration manually"
-    fi
-
-    # Fallback manual configuration
     local auth_file="/etc/pam.d/common-auth"
     local account_file="/etc/pam.d/common-account"
+    local faillock_conf="/etc/security/faillock.conf"
 
     [[ ! -f "$auth_file" ]] && { log_error "$auth_file not found"; return 1; }
     [[ ! -f "$account_file" ]] && { log_error "$account_file not found"; return 1; }
@@ -461,25 +405,114 @@ EOF
     backup_file "$auth_file"
     backup_file "$account_file"
 
-    if ! grep -q "pam_faillock.so.*preauth" "$auth_file"; then
-        sed -i "1i auth required pam_faillock.so preauth silent deny=$DEFAULT_LOCK_DENY unlock_time=$DEFAULT_LOCK_TIME fail_interval=$DEFAULT_LOCK_INTERVAL" "$auth_file"
-        log_success "Added faillock preauth check"
+    # Configure /etc/pam.d/common-auth with proper faillock structure
+    # Only rebuild if not already configured correctly
+    if ! grep -q "pam_faillock.so preauth" "$auth_file" || ! grep -q "pam_faillock.so authfail" "$auth_file"; then
+        log_info "Configuring common-auth with faillock..."
+
+        # Create new common-auth content
+        cat > "$auth_file" <<'EOF'
+#
+# /etc/pam.d/common-auth - authentication settings common to all services
+#
+# This file is included from other service-specific PAM config files,
+# and should contain a list of the authentication modules that define
+# the central authentication scheme for use on the system
+# (e.g., /etc/shadow, LDAP, Kerberos, etc.).  The default is to use the
+# traditional Unix authentication mechanisms.
+#
+# here are the per-package modules (the "Primary" block)
+auth    required                        pam_faillock.so preauth
+auth    [success=1 default=ignore]      pam_unix.so
+# here's the fallback if no module succeeds
+auth    [default=die]                   pam_faillock.so authfail
+auth    requisite                       pam_deny.so
+# prime the stack with a positive return value if there isn't one already;
+# this avoids us returning an error just because nothing sets a success code
+# since the modules above will each just jump around
+auth    required                        pam_permit.so
+# and here are more per-package modules (the "Additional" block)
+auth    optional                        pam_cap.so
+EOF
+        log_success "Configured common-auth with faillock preauth and authfail"
+    else
+        log_info "common-auth already has faillock configured"
     fi
 
-    if ! grep -q "pam_faillock.so.*authfail" "$auth_file"; then
-        sed -i "/pam_unix.so/a auth [default=die] pam_faillock.so authfail deny=$DEFAULT_LOCK_DENY unlock_time=$DEFAULT_LOCK_TIME fail_interval=$DEFAULT_LOCK_INTERVAL" "$auth_file"
-        log_success "Added faillock authfail handler"
-    fi
-
+    # Configure /etc/pam.d/common-account to add faillock
     if ! grep -q "pam_faillock.so" "$account_file"; then
-        sed -i "2i account required pam_faillock.so" "$account_file"
-        log_success "Added faillock account check"
+        log_info "Adding faillock to common-account..."
+
+        # Read the file and insert after the comment block
+        local temp_file=$(mktemp)
+        local inserted=0
+        while IFS= read -r line; do
+            echo "$line" >> "$temp_file"
+            # After we see the comment block ending, insert faillock
+            if [[ "$line" =~ ^#.*common-account && $inserted -eq 0 ]]; then
+                # Read until we find the end of comments
+                while IFS= read -r nextline; do
+                    echo "$nextline" >> "$temp_file"
+                    if [[ ! "$nextline" =~ ^# && -n "$nextline" ]]; then
+                        # Found first non-comment line, insert before it
+                        echo "account required                        pam_faillock.so" >> "$temp_file"
+                        inserted=1
+                        break
+                    elif [[ -z "$nextline" ]]; then
+                        # Empty line after comments, insert here
+                        echo "account required                        pam_faillock.so" >> "$temp_file"
+                        inserted=1
+                        break
+                    fi
+                done
+            fi
+        done < "$account_file"
+
+        # If we haven't inserted yet, add at line 2
+        if [[ $inserted -eq 0 ]]; then
+            head -n 1 "$account_file" > "$temp_file"
+            echo "account required                        pam_faillock.so" >> "$temp_file"
+            tail -n +2 "$account_file" >> "$temp_file"
+        fi
+
+        mv "$temp_file" "$account_file"
+        chmod 644 "$account_file"
+        log_success "Added faillock to common-account"
+    else
+        log_info "common-account already has faillock configured"
     fi
 
+    # Configure /etc/security/faillock.conf
+    if [[ -f "$faillock_conf" ]]; then
+        backup_file "$faillock_conf"
+    fi
+
+    log_info "Configuring faillock.conf..."
+
+    # Create or update faillock.conf with explicit settings
+    cat > "$faillock_conf" <<EOF
+# CyberPatriot - Account Lockout Configuration
+# Lock account after failed login attempts
+
+# Deny access after this many failed attempts
+deny = $DEFAULT_LOCK_DENY
+
+# Unlock time in seconds (900 = 15 minutes)
+unlock_time = $DEFAULT_LOCK_TIME
+
+# Time window for counting failures (900 = 15 minutes)
+fail_interval = $DEFAULT_LOCK_INTERVAL
+
+# Also enforce for root account
+even_deny_root
+EOF
+
+    log_success "Configured faillock.conf"
     log_success "Account lockout policy configured:"
     log_info "  - Lock after $DEFAULT_LOCK_DENY failed attempts"
-    log_info "  - Lock duration: $DEFAULT_LOCK_TIME seconds"
-    log_info "  - Failure interval: $DEFAULT_LOCK_INTERVAL seconds"
+    log_info "  - Lock duration: $DEFAULT_LOCK_TIME seconds ($((DEFAULT_LOCK_TIME/60)) minutes)"
+    log_info "  - Failure interval: $DEFAULT_LOCK_INTERVAL seconds ($((DEFAULT_LOCK_INTERVAL/60)) minutes)"
+    log_info "  - Enforcement applies to root as well"
 
     return 0
 }
