@@ -7,17 +7,16 @@ source "$SCRIPT_DIR/../lib/utils.sh"
 source "$SCRIPT_DIR/../lib/openrouter.sh"
 
 # System prompt for the OpenRouter-powered forensic assistant
-readonly FORENSICS_SYSTEM_PROMPT='You are a CyberPatriot Linux forensic analyst. Analyze the provided forensic question files an
-d craft clear, concise answers that students can enter into the scoring report. When needed you may request exactly one safe, re
-ad-only shell command to gather extra evidence (allowed commands: cat, ls, grep, find, strings, head, tail, sed, awk, wc, stat).
-Only request a command if the supplied question text is insufficient. Always respond with valid JSON in the exact format:
+readonly FORENSICS_SYSTEM_PROMPT='You are a CyberPatriot Linux forensic analyst. Analyze the provided forensic question files and craft clear, concise answers that students can enter into the scoring report. When needed you may request safe, read-only shell commands to gather extra evidence (allowed commands: cat, ls, grep, find, strings, head, tail, sed, awk, wc, stat). Request only what is necessary. Always respond with valid JSON in the exact format:
 {
   "answers": [
-    {"number": 1, "answer": "Answer text", "explanation": "(optional short reasoning)"}
+    {"number": 1, "answers": ["Answer text"], "explanation": "(optional short reasoning)", "needs_manual_review": false}
   ],
-  "command_request": null | {"command": "cat /path", "reason": "Why the command is needed"}
+  "command_requests": [
+    {"command": "cat /path", "reason": "Why the command is needed"}
+  ]
 }
-Ensure answers directly address the question prompts. If no command is required set command_request to null.'
+Use an array for answers even when there is only one. Set needs_manual_review to true if you are not confident. Omit command_requests or return an empty array when no additional data is required. After receiving command output, provide final answers and avoid asking for more commands.'
 
 # Discover forensic question files on user desktops
 discover_forensics_questions() {
@@ -67,8 +66,8 @@ build_forensics_user_message() {
         '{
             task: "Analyze CyberPatriot forensic question files and produce answers.",
             instructions: {
-                response_format: "Return JSON with keys answers (array) and command_request (null or object).",
-                command_guidance: "You may request at most one safe, read-only shell command if the supplied data is insufficient."
+                response_format: "Return JSON with keys answers (array of objects) and command_requests (array).",
+                command_guidance: "Request only the safe, read-only commands you need, then decide if manual review is required."
             },
             questions: $questions
         }' | jq -c '.'
@@ -136,6 +135,91 @@ is_safe_forensics_command() {
             return 1
             ;;
     esac
+}
+
+# Normalize command requests into a JSON array
+extract_forensics_command_requests() {
+    local response_json="$1"
+
+    echo "$response_json" | jq -c '
+        if has("command_requests") then
+            if (.command_requests | type == "array") then .command_requests else [] end
+        elif has("command_request") then
+            if (.command_request | type == "object") then [.command_request] else [] end
+        else
+            []
+        end | map(select(.command and (.command | length > 0)))'
+}
+
+# Write AI-provided answers into the forensic question text files
+write_forensics_answers() {
+    local questions_json="$1"
+    local answers_json="$2"
+
+    while IFS= read -r answer_entry; do
+        local number
+        number=$(echo "$answer_entry" | jq -r '.number // empty')
+        [[ -z "$number" ]] && continue
+
+        local needs_manual
+        needs_manual=$(echo "$answer_entry" | jq -r '.needs_manual_review // false')
+
+        local path
+        path=$(echo "$questions_json" | jq -r --argjson num "$number" '.[] | select(.number == $num) | .path' | head -n1)
+
+        if [[ -z "$path" ]]; then
+            log_warn "Could not locate file for Question $number"
+            continue
+        fi
+
+        if [[ "$needs_manual" == "true" ]]; then
+            log_warn "Question $number flagged for manual review; not updating $path"
+            continue
+        fi
+
+        mapfile -t answers < <(echo "$answer_entry" | jq -r '
+            if has("answers") then
+                if (.answers | type == "array") then .answers[] else .answers end
+            elif has("answer") then
+                if (.answer | type == "array") then .answer[] else .answer end
+            else
+                empty
+            end')
+
+        if (( ${#answers[@]} == 0 )); then
+            log_warn "No answers provided for Question $number; skipping file update"
+            continue
+        fi
+
+        local tmp_file
+        tmp_file=$(mktemp)
+        local replaced=0
+
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            if [[ "$line" =~ ^ANSWER: ]]; then
+                if (( replaced == 0 )); then
+                    for ans in "${answers[@]}"; do
+                        echo "ANSWER: $ans" >>"$tmp_file"
+                    done
+                    replaced=1
+                fi
+            else
+                echo "$line" >>"$tmp_file"
+            fi
+        done < "$path"
+
+        if (( replaced == 0 )); then
+            echo >>"$tmp_file"
+            for ans in "${answers[@]}"; do
+                echo "ANSWER: $ans" >>"$tmp_file"
+            done
+        fi
+
+        mv "$tmp_file" "$path"
+        log_success "Updated answers for Question $number at $path"
+    done < <(echo "$answers_json" | jq -c '.answers[]' 2>/dev/null)
+
+    return 0
 }
 
 # Execute an AI-requested command and capture output
@@ -207,30 +291,43 @@ obtain_forensics_answers() {
         return 1
     }
 
-    local command
-    command=$(echo "$parsed_initial" | jq -r '.command_request.command // empty' 2>/dev/null || true)
+    local command_requests
+    command_requests=$(extract_forensics_command_requests "$parsed_initial")
 
-    if [[ -n "$command" ]]; then
-        local reason
-        reason=$(echo "$parsed_initial" | jq -r '.command_request.reason // ""' 2>/dev/null || true)
-        log_info "AI requested command: $command"
-        [[ -n "$reason" ]] && log_info "Reason: $reason"
+    if [[ "$command_requests" != "[]" ]]; then
+        local command_results=()
+        local index=0
 
-        local command_result
-        command_result=$(execute_forensics_command "$command")
+        while IFS= read -r command_obj; do
+            local command
+            command=$(echo "$command_obj" | jq -r '.command')
+            local reason
+            reason=$(echo "$command_obj" | jq -r '.reason // ""')
+            index=$((index + 1))
 
-        echo "$command_result" | jq '.' > "$SCRIPT_DIR/../data/forensics_ai_command_result.json"
-        local exit_code
-        exit_code=$(echo "$command_result" | jq -r '.exit_code')
-        log_info "Command exit code: $exit_code"
+            log_info "AI requested command ($index): $command"
+            [[ -n "$reason" ]] && log_info "Reason: $reason"
+
+            local command_result
+            command_result=$(execute_forensics_command "$command")
+            command_results+=("$command_result")
+
+            local exit_code
+            exit_code=$(echo "$command_result" | jq -r '.exit_code')
+            log_info "Command exit code: $exit_code"
+        done < <(echo "$command_requests" | jq -c '.[]')
+
+        local command_results_json
+        command_results_json=$(printf '%s\n' "${command_results[@]}" | jq -s '.')
+        echo "$command_results_json" | jq '.' > "$SCRIPT_DIR/../data/forensics_ai_command_result.json"
 
         local followup_user
         followup_user=$(jq -n \
-            --argjson command_result "$command_result" \
+            --argjson command_results "$command_results_json" \
             --argjson questions "$questions_json" \
             '{
-                task: "Provide final answers using the supplied command output.",
-                command_result: $command_result,
+                task: "Provide final answers using the supplied command outputs.",
+                command_results: $command_results,
                 questions: $questions
             }' | jq -c '.')
 
@@ -305,11 +402,21 @@ run_forensics_questions() {
 
         if echo "$answers_json" | jq -e '.answers and (.answers | type == "array")' >/dev/null 2>&1; then
             log_section "Forensics Answers"
-            echo "$answers_json" | jq -r '.answers[] | "Question \(.number): \(.answer)"'
+            echo "$answers_json" | jq -r '
+                .answers[] |
+                "Question \(.number): " +
+                (if has("answers") then
+                    (if (.answers | type == "array") then (.answers | join(" | ")) else (.answers | tostring) end)
+                 else
+                    (.answer // "")
+                 end) +
+                (if (.needs_manual_review // false) then " (manual review requested)" else "" end)
+            '
             if echo "$answers_json" | jq -e '.answers[] | select(has("explanation"))' >/dev/null 2>&1; then
                 echo
                 echo "$answers_json" | jq -r '.answers[] | select(has("explanation")) | "Q\(.number) Explanation: \(.explanation)"'
             fi
+            write_forensics_answers "$questions_json" "$answers_json"
             log_success "Module forensics_questions completed successfully"
             return 0
         else
