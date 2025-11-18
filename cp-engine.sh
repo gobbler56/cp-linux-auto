@@ -300,7 +300,14 @@ interactive_mode() {
             exit 0
         elif [[ "$choice" == "a" ]]; then
             run_all_modules
-            break
+            echo
+            read -p "Run another module? (y/n): " -n 1 -r
+            echo
+            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                log_info "Exiting interactive mode"
+                exit 0
+            fi
+            continue
         elif [[ "$choice" =~ ^[0-9]+$ ]] && [[ $choice -ge 1 ]] && [[ $choice -le ${#MODULES[@]} ]]; then
             local selected_module="${MODULES[$((choice-1))]}"
             run_module "$selected_module"
