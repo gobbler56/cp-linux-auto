@@ -280,14 +280,9 @@ configure_password_hashing() {
 
     backup_file "$pam_file"
 
-    # Determine best available hashing algorithm
+    # Force SHA512 encryption method
     local hash_algo="sha512"
-    local pam_unix_so=$(find /lib* /usr/lib* -name "pam_unix.so" 2>/dev/null | head -1)
-
-    if [[ -n "$pam_unix_so" ]] && strings "$pam_unix_so" 2>/dev/null | grep -q yescrypt; then
-        hash_algo="yescrypt"
-        log_info "yescrypt support detected (modern, more secure)"
-    fi
+    log_info "Forcing SHA512 encryption method for login.defs"
 
     # Update pam_unix line with secure hashing
     if grep -q "pam_unix.so" "$pam_file"; then
