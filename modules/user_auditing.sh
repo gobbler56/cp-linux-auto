@@ -702,21 +702,23 @@ check_password_hashing() {
 
     # Check what hashing algorithm is configured
     if [[ -f /etc/pam.d/common-password ]]; then
-        if grep -q "pam_unix.so.*sha512" /etc/pam.d/common-password; then
-            log_success "Password hashing is set to SHA512"
-        elif grep -q "pam_unix.so.*yescrypt" /etc/pam.d/common-password; then
+        if grep -q "pam_unix.so.*yescrypt" /etc/pam.d/common-password; then
             log_success "Password hashing is set to yescrypt (modern)"
+        elif grep -q "pam_unix.so.*sha512" /etc/pam.d/common-password; then
+            log_warn "Password hashing is set to SHA512; consider migrating to yescrypt"
         else
             log_warn "Password hashing may not be using a secure algorithm"
-            log_info "Consider configuring SHA512 or yescrypt in /etc/pam.d/common-password"
+            log_info "Consider configuring yescrypt in /etc/pam.d/common-password"
         fi
     fi
 
     # Check /etc/login.defs
     if [[ -f /etc/login.defs ]]; then
         local encrypt_method=$(grep "^ENCRYPT_METHOD" /etc/login.defs | awk '{print $2}')
-        if [[ "$encrypt_method" == "SHA512" ]] || [[ "$encrypt_method" == "YESCRYPT" ]]; then
+        if [[ "$encrypt_method" == "YESCRYPT" ]]; then
             log_success "ENCRYPT_METHOD in login.defs is set to $encrypt_method"
+        elif [[ "$encrypt_method" == "SHA512" ]]; then
+            log_warn "ENCRYPT_METHOD in login.defs is set to SHA512; consider updating to YESCRYPT"
         else
             log_warn "ENCRYPT_METHOD in login.defs is: ${encrypt_method:-not set}"
         fi

@@ -289,9 +289,9 @@ configure_password_hashing() {
 
     backup_file "$pam_file"
 
-    # Use SHA512 as requested for system-wide encryption
-    local hash_algo="sha512"
-    log_info "Configuring SHA512 password hashing"
+    # Use yescrypt as requested for system-wide encryption
+    local hash_algo="yescrypt"
+    log_info "Configuring yescrypt password hashing"
 
     # Update pam_unix line with secure hashing
     if grep -q "pam_unix.so" "$pam_file"; then
@@ -305,17 +305,17 @@ configure_password_hashing() {
     # login.defs is now configured in configure_login_defs(), but verify it's set
     local login_defs="/etc/login.defs"
     if [[ -f "$login_defs" ]]; then
-        if ! grep -q "^ENCRYPT_METHOD.*SHA512" "$login_defs"; then
-            log_warn "ENCRYPT_METHOD not set to SHA512 in login.defs, fixing..."
+        if ! grep -q "^ENCRYPT_METHOD.*YESCRYPT" "$login_defs"; then
+            log_warn "ENCRYPT_METHOD not set to YESCRYPT in login.defs, fixing..."
             backup_file "$login_defs"
             if grep -q "^ENCRYPT_METHOD" "$login_defs"; then
-                sed -i "s/^ENCRYPT_METHOD.*/ENCRYPT_METHOD SHA512/" "$login_defs"
+                sed -i "s/^ENCRYPT_METHOD.*/ENCRYPT_METHOD YESCRYPT/" "$login_defs"
             else
-                echo "ENCRYPT_METHOD SHA512" >> "$login_defs"
+                echo "ENCRYPT_METHOD YESCRYPT" >> "$login_defs"
             fi
-            log_success "Set ENCRYPT_METHOD to SHA512 in login.defs"
+            log_success "Set ENCRYPT_METHOD to YESCRYPT in login.defs"
         else
-            log_info "ENCRYPT_METHOD already set to SHA512 in login.defs"
+            log_info "ENCRYPT_METHOD already set to YESCRYPT in login.defs"
         fi
     fi
 
