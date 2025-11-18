@@ -59,6 +59,15 @@ configure_login_defs() {
 
     backup_file "$file"
 
+    # Set ENCRYPT_METHOD to SHA512 (must be set before password operations)
+    if grep -q "^ENCRYPT_METHOD" "$file"; then
+        sed -i "s/^ENCRYPT_METHOD.*/ENCRYPT_METHOD SHA512/" "$file"
+        log_success "Updated ENCRYPT_METHOD to SHA512"
+    else
+        echo -e "ENCRYPT_METHOD SHA512" >> "$file"
+        log_success "Added ENCRYPT_METHOD=SHA512"
+    fi
+
     # Set PASS_MAX_DAYS (23)
     if grep -q "^PASS_MAX_DAYS" "$file"; then
         sed -i "s/^PASS_MAX_DAYS.*/PASS_MAX_DAYS\t$DEFAULT_PASS_MAX_DAYS/" "$file"
@@ -280,14 +289,9 @@ configure_password_hashing() {
 
     backup_file "$pam_file"
 
-    # Determine best available hashing algorithm
+    # Use SHA512 as requested for system-wide encryption
     local hash_algo="sha512"
-    local pam_unix_so=$(find /lib* /usr/lib* -name "pam_unix.so" 2>/dev/null | head -1)
-
-    if [[ -n "$pam_unix_so" ]] && strings "$pam_unix_so" 2>/dev/null | grep -q yescrypt; then
-        hash_algo="yescrypt"
-        log_info "yescrypt support detected (modern, more secure)"
-    fi
+    log_info "Configuring SHA512 password hashing"
 
     # Update pam_unix line with secure hashing
     if grep -q "pam_unix.so" "$pam_file"; then
@@ -295,19 +299,24 @@ configure_password_hashing() {
         sed -i "s/\(pam_unix.so[^#]*\)\(sha512\|yescrypt\|md5\|des\)/\1/" "$pam_file"
         # Add the secure hash algorithm
         sed -i "s/\(pam_unix.so\)/\1 $hash_algo/" "$pam_file"
-        log_success "Configured password hashing to use $hash_algo"
+        log_success "Configured password hashing to use $hash_algo in PAM"
     fi
 
-    # Also set in login.defs
+    # login.defs is now configured in configure_login_defs(), but verify it's set
     local login_defs="/etc/login.defs"
     if [[ -f "$login_defs" ]]; then
-        backup_file "$login_defs"
-        if grep -q "^ENCRYPT_METHOD" "$login_defs"; then
-            sed -i "s/^ENCRYPT_METHOD.*/ENCRYPT_METHOD $(echo $hash_algo | tr '[:lower:]' '[:upper:]')/" "$login_defs"
+        if ! grep -q "^ENCRYPT_METHOD.*SHA512" "$login_defs"; then
+            log_warn "ENCRYPT_METHOD not set to SHA512 in login.defs, fixing..."
+            backup_file "$login_defs"
+            if grep -q "^ENCRYPT_METHOD" "$login_defs"; then
+                sed -i "s/^ENCRYPT_METHOD.*/ENCRYPT_METHOD SHA512/" "$login_defs"
+            else
+                echo "ENCRYPT_METHOD SHA512" >> "$login_defs"
+            fi
+            log_success "Set ENCRYPT_METHOD to SHA512 in login.defs"
         else
-            echo "ENCRYPT_METHOD $(echo $hash_algo | tr '[:lower:]' '[:upper:]')" >> "$login_defs"
+            log_info "ENCRYPT_METHOD already set to SHA512 in login.defs"
         fi
-        log_success "Set ENCRYPT_METHOD to $hash_algo in login.defs"
     fi
 
     return 0

@@ -764,6 +764,184 @@ disable_system_user_logins() {
     return 0
 }
 
+# Ensure ALL system accounts (including root) have nologin shells
+ensure_system_accounts_nologin() {
+    log_section "Ensuring All System Accounts Have Nologin Shells"
+
+    local modified_count=0
+
+    # Process all users with UID < 1000 (system accounts)
+    while IFS=: read -r username _ uid _ _ _ current_shell; do
+        # Skip if UID >= 1000 (regular users)
+        [[ $uid -ge 1000 ]] && continue
+
+        # Skip nobody (UID 65534)
+        [[ $uid -eq 65534 ]] && continue
+
+        # Check if shell is already nologin or false
+        if [[ "$current_shell" == "/usr/sbin/nologin" ]] || [[ "$current_shell" == "/bin/false" ]]; then
+            log_debug "User $username already has nologin shell"
+            continue
+        fi
+
+        log_info "Setting nologin shell for system account: $username (UID: $uid, current shell: $current_shell)"
+
+        # Set shell to nologin
+        if usermod -s /usr/sbin/nologin "$username" 2>/dev/null; then
+            log_success "Set nologin shell for: $username"
+            ((modified_count++))
+        else
+            log_error "Failed to set nologin shell for: $username"
+        fi
+    done < /etc/passwd
+
+    if [[ $modified_count -eq 0 ]]; then
+        log_info "All system accounts already have nologin shells"
+    else
+        log_success "Set nologin shell for $modified_count system account(s)"
+    fi
+
+    return 0
+}
+
+# Ensure all user accounts have matching UID:GID (primary group)
+ensure_matching_uid_gid() {
+    log_section "Ensuring User Accounts Have Matching UID:GID"
+
+    local fixed_count=0
+
+    # Process all users with UID >= 1000 (regular users)
+    while IFS=: read -r username _ uid gid _ _ _; do
+        # Skip if UID < 1000 (system accounts)
+        [[ $uid -lt 1000 ]] && continue
+
+        # Skip nobody (UID 65534)
+        [[ $uid -eq 65534 ]] && continue
+
+        # Skip if not an authorized user
+        if ! is_user_authorized "$username"; then
+            log_debug "Skipping unauthorized user: $username"
+            continue
+        fi
+
+        # Check if UID matches GID
+        if [[ $uid -eq $gid ]]; then
+            log_debug "User $username has matching UID:GID ($uid:$gid)"
+            continue
+        fi
+
+        log_warn "User $username has mismatched UID:GID ($uid:$gid)"
+
+        # Check if a group with the same name as the user exists
+        local user_group_gid=""
+        if group_exists "$username"; then
+            user_group_gid=$(getent group "$username" | cut -d: -f3)
+            log_info "Group $username exists with GID: $user_group_gid"
+
+            # If the group GID matches the UID, just change the user's primary group
+            if [[ $user_group_gid -eq $uid ]]; then
+                log_info "Setting primary group for $username to $username (GID: $user_group_gid)"
+                if usermod -g "$username" "$username" 2>/dev/null; then
+                    log_success "Updated primary group for $username to match UID"
+                    ((fixed_count++))
+                else
+                    log_error "Failed to update primary group for $username"
+                fi
+            else
+                log_warn "Group $username exists but has GID $user_group_gid (expected $uid)"
+                log_info "Creating new group with matching UID:GID for $username"
+
+                # Try to create a new group with GID matching UID
+                local new_group="${username}_group"
+                if ! group_exists "$new_group"; then
+                    if groupadd -g "$uid" "$new_group" 2>/dev/null; then
+                        log_success "Created group $new_group with GID $uid"
+                        if usermod -g "$new_group" "$username" 2>/dev/null; then
+                            log_success "Updated primary group for $username to $new_group"
+                            ((fixed_count++))
+                        fi
+                    else
+                        log_error "Failed to create group with GID $uid"
+                    fi
+                fi
+            fi
+        else
+            # Group doesn't exist, create it with matching GID
+            log_info "Creating group $username with GID $uid"
+            if groupadd -g "$uid" "$username" 2>/dev/null; then
+                log_success "Created group $username with GID $uid"
+                if usermod -g "$username" "$username" 2>/dev/null; then
+                    log_success "Updated primary group for $username"
+                    ((fixed_count++))
+                fi
+            else
+                log_error "Failed to create group $username with GID $uid (GID may be in use)"
+            fi
+        fi
+    done < /etc/passwd
+
+    if [[ $fixed_count -eq 0 ]]; then
+        log_info "All user accounts already have matching UID:GID"
+    else
+        log_success "Fixed $fixed_count user account(s) to have matching UID:GID"
+    fi
+
+    return 0
+}
+
+# Verify user account shells are properly configured
+verify_user_account_shells() {
+    log_section "Verifying User Account Shells"
+
+    local fixed_count=0
+
+    # Process all users with UID >= 1000 (regular users)
+    while IFS=: read -r username _ uid _ _ _ current_shell; do
+        # Skip if UID < 1000 (system accounts)
+        [[ $uid -lt 1000 ]] && continue
+
+        # Skip nobody (UID 65534)
+        [[ $uid -eq 65534 ]] && continue
+
+        # Skip if not an authorized user
+        if ! is_user_authorized "$username"; then
+            log_debug "Skipping unauthorized user: $username"
+            continue
+        fi
+
+        # Check if shell is valid and appropriate for a user account
+        case "$current_shell" in
+            /bin/bash|/bin/sh|/bin/dash|/bin/zsh|/usr/bin/zsh|/bin/ksh|/usr/bin/fish)
+                log_debug "User $username has valid shell: $current_shell"
+                ;;
+            /usr/sbin/nologin|/bin/false)
+                log_warn "User $username has nologin shell but is an authorized user"
+                log_info "Setting shell to /bin/bash for $username"
+                if usermod -s /bin/bash "$username" 2>/dev/null; then
+                    log_success "Set shell to /bin/bash for $username"
+                    ((fixed_count++))
+                fi
+                ;;
+            *)
+                log_warn "User $username has non-standard shell: $current_shell"
+                log_info "Setting shell to /bin/bash for $username"
+                if usermod -s /bin/bash "$username" 2>/dev/null; then
+                    log_success "Set shell to /bin/bash for $username"
+                    ((fixed_count++))
+                fi
+                ;;
+        esac
+    done < /etc/passwd
+
+    if [[ $fixed_count -eq 0 ]]; then
+        log_info "All user account shells are properly configured"
+    else
+        log_success "Fixed $fixed_count user account shell(s)"
+    fi
+
+    return 0
+}
+
 # Main module execution
 run_user_auditing() {
     log_section "User Auditing Module"
@@ -790,6 +968,11 @@ run_user_auditing() {
     enforce_password_policies
     check_password_hashing
     disable_system_user_logins
+
+    # New comprehensive user auditing functions
+    ensure_system_accounts_nologin    # Ensure all system accounts (including root) have nologin
+    ensure_matching_uid_gid           # Ensure all user accounts have matching UID:GID
+    verify_user_account_shells        # Verify user account shells are properly configured
 
     log_section "User Auditing Complete"
     log_success "All user auditing tasks completed"
