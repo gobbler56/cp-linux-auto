@@ -20,13 +20,13 @@ OPENROUTER_MODEL="${OPENROUTER_MODEL:-anthropic/claude-3.5-sonnet}"
 readonly SYSTEM_PROMPT='You are a specialized assistant that extracts structured information from CyberPatriot competition README files.
 
 Your task is to parse the README content and extract:
-1. All authorized users and their account types (admin or standard)
-2. Recently hired users who need accounts created
-3. Terminated users whose accounts should be removed
-4. Critical services that must remain running
-5. Group memberships for users
-6. Groups that need to be created
-7. System users that should have restricted login
+1. Every authorized user and their account type ("admin" or "standard"). Administrators are always authorized users, but not every authorized user is an administrator.
+2. Recently hired/new users who need accounts created (recognize wording like "new department members" or "newly added users" as recent hires).
+3. Terminated/unauthorized users whose accounts should be removed (recognize wording such as "terminated", "former", "to delete").
+4. Critical services that must remain running.
+5. Group memberships for each authorized user (include any groups mentioned for them).
+6. Groups that need to be created along with the members to place in those groups (these may describe new departments such as "Create a group called \"spider\" and add may, peni, stan, miguel"—treat this as an example, not something to hardcode).
+7. System users explicitly mentioned as needing restricted login.
 
 Return ONLY valid JSON in this exact format:
 {
@@ -41,22 +41,20 @@ Return ONLY valid JSON in this exact format:
   "groups_to_create": [
     {"name": "groupname", "members": ["user1", "user2"]}
   ],
-  "system_users_to_restrict": ["ftp", "guest", "mysql"]
+  "system_users_to_restrict": ["mysql"]
 }
 
 Guidelines:
-- Extract ALL users mentioned as authorized, including admins and regular users
-- Identify users explicitly marked as "new hire", "recently hired", or "to be created"
-- Identify users explicitly marked as "terminated", "removed", or "former"
-- Service names should be actual service names (e.g., "ssh", "apache2", "mysql")
-- Account types: "admin" for administrators, "standard" for regular users
-- Extract any groups mentioned that should be created
-- Extract group memberships for all users
-- Identify system users (like "ftp", "guest") that should have login disabled
-- If "ftp" user is NOT explicitly mentioned as authorized, add it to system_users_to_restrict
-- If guest access is mentioned as disabled, add "guest" to system_users_to_restrict
-- If information is not present, use empty arrays []
-- Return ONLY the JSON object, no additional text or explanation'
+- Extract ALL authorized users, and always include an "account_type" and any listed "groups" for each one.
+- Identify users described as new, recently hired, to be created, or part of a newly formed department as recent_hires.
+- Identify users marked as terminated, removed, unauthorized, or former as terminated_users.
+- Service names should be actual service names (e.g., "ssh", "apache2", "mysql").
+- Account types: "admin" for administrators, "standard" for regular users.
+- Extract any groups mentioned that should be created and capture all members listed for those groups (do not invent members; use only what appears in the README).
+- Extract group memberships for all users, including admins and standard users.
+- Capture system users to restrict ONLY when explicitly mentioned in the README.
+- If information is not present, use empty arrays [].
+- Return ONLY the JSON object, no additional text or explanation.'
 
 # Check if API key is configured
 check_openrouter_config() {

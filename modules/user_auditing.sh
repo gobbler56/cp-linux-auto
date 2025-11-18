@@ -17,6 +17,7 @@ readonly SECURE_PASSWORD_MIN_LENGTH=12
 readonly PASSWORD_MAX_DAYS=90
 readonly PASSWORD_MIN_DAYS=7
 readonly PASSWORD_WARN_DAYS=14
+readonly DEFAULT_SYSTEM_USERS_TO_RESTRICT=("guest" "ftp")
 
 # System accounts that should never be removed
 readonly SYSTEM_ACCOUNTS=(
@@ -274,7 +275,7 @@ handle_system_users() {
 
     local restricted_count=0
 
-    # Get users that should be restricted from README
+    # Get users that should be restricted (defaults plus README)
     while IFS= read -r username; do
         [[ -z "$username" ]] && continue
 
@@ -315,7 +316,7 @@ handle_system_users() {
                 fi
             fi
         fi
-    done < <(get_system_users_to_restrict)
+    done < <(build_system_users_to_restrict)
 
     if [[ $restricted_count -eq 0 ]]; then
         log_info "No system users to restrict"
@@ -618,27 +619,23 @@ fix_null_passwords() {
         # Skip if username is empty
         [[ -z "$username" ]] && continue
 
-        # Skip system accounts
-        is_system_account "$username" && continue
+        # Skip system accounts except root
+        if is_system_account "$username" && [[ "$username" != "root" ]]; then
+            continue
+        fi
 
         # Check if password field is empty or just contains special markers
         if [[ -z "$password_field" ]] || [[ "$password_field" == "!" ]] || [[ "$password_field" == "*" ]]; then
-            # Skip locked system accounts
-            is_system_account "$username" && continue
+            log_warn "User $username has no password set"
 
-            # Check if user is authorized
-            if is_user_authorized "$username"; then
-                log_warn "User $username has no password set"
-
-                # Set a password (skip main user as per requirements)
-                if [[ "$username" != "$main_user" ]]; then
-                    echo "$username:$DEFAULT_PASSWORD" | chpasswd
-                    passwd -e "$username" 2>/dev/null  # Force change on login
-                    log_success "Set password for user: $username"
-                    ((fixed_count++))
-                else
-                    log_warn "Skipping main user $username (don't change main user password)"
-                fi
+            # Set a password (skip main user as per requirements)
+            if [[ "$username" != "$main_user" ]]; then
+                echo "$username:$DEFAULT_PASSWORD" | chpasswd
+                passwd -e "$username" 2>/dev/null  # Force change on login
+                log_success "Set password for user: $username"
+                ((fixed_count++))
+            else
+                log_warn "Skipping main user $username (don't change main user password)"
             fi
         fi
     done < /etc/shadow
@@ -657,19 +654,34 @@ enforce_password_policies() {
     log_section "Enforcing Password Policies"
 
     local changes_made=0
-    local main_user=$(get_main_user)
 
-    # Process each authorized user
+    # Build a unified list of users to enforce policy on (all regular users and root)
+    declare -A target_users=()
+
+    if user_exists "root"; then
+        target_users["root"]=1
+    fi
+
     while IFS= read -r username; do
         [[ -z "$username" ]] && continue
+        target_users["$username"]=1
+    done < <(get_current_users)
 
-        # Skip if user doesn't exist
-        if ! user_exists "$username"; then
+    while IFS= read -r username; do
+        [[ -z "$username" ]] && continue
+        target_users["$username"]=1
+    done < <(get_authorized_users)
+
+    # Apply password policy to each target (skip system accounts except root)
+    for username in "${!target_users[@]}"; do
+        [[ -z "$username" ]] && continue
+
+        if [[ "$username" != "root" ]] && is_system_account "$username"; then
             continue
         fi
 
-        # Skip system accounts
-        if is_system_account "$username"; then
+        # Skip if user doesn't exist
+        if ! user_exists "$username"; then
             continue
         fi
 
@@ -687,7 +699,7 @@ enforce_password_policies() {
         # Ensure password expires (remove -1 which means never)
         chage -E -1 "$username" 2>/dev/null
 
-    done < <(get_authorized_users)
+    done
 
     if [[ $changes_made -gt 0 ]]; then
         log_success "Applied password policies to $changes_made user(s)"
@@ -727,13 +739,33 @@ check_password_hashing() {
     return 0
 }
 
+build_system_users_to_restrict() {
+    declare -A seen
+
+    # Always include baseline system accounts that must be restricted
+    for default_user in "${DEFAULT_SYSTEM_USERS_TO_RESTRICT[@]}"; do
+        [[ -z "$default_user" ]] && continue
+        seen["$default_user"]=1
+    done
+
+    # Merge in any explicit README entries
+    while IFS= read -r from_readme; do
+        [[ -z "$from_readme" ]] && continue
+        seen["$from_readme"]=1
+    done < <(get_system_users_to_restrict 2>/dev/null || true)
+
+    for username in "${!seen[@]}"; do
+        echo "$username"
+    done
+}
+
 # Disable password login for system users
 disable_system_user_logins() {
     log_section "Disabling Login for System Users"
 
     local disabled_count=0
 
-    # Get system users to restrict
+    # Get system users to restrict (defaults plus README entries)
     while IFS= read -r username; do
         [[ -z "$username" ]] && continue
 
@@ -757,7 +789,7 @@ disable_system_user_logins() {
 
         log_success "Disabled password login for: $username"
         ((disabled_count++))
-    done < <(get_system_users_to_restrict)
+    done < <(build_system_users_to_restrict)
 
     if [[ $disabled_count -gt 0 ]]; then
         log_success "Disabled login for $disabled_count system user(s)"
