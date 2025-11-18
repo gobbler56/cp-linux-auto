@@ -131,11 +131,74 @@ check_system() {
     fi
 }
 
+# Repair APT sources for supported distributions without touching /etc/apt/sources.list
+repair_apt_sources() {
+    log_section "Repairing APT Sources"
+
+    local os
+    os=$(detect_os)
+    local version
+    version=$(detect_os_version)
+
+    log_info "Detected OS: $os $version"
+
+    # Use VERSION_CODENAME when available to avoid relying on lsb_release
+    local codename=""
+    if [[ -f /etc/os-release ]]; then
+        # shellcheck disable=SC1091
+        . /etc/os-release
+        codename=${VERSION_CODENAME:-}
+    fi
+
+    if [[ "$os" == "linuxmint" && "$version" == "21"* ]]; then
+        local repo_file="/etc/apt/sources.list.d/official-package-repositories.list"
+
+        [[ -f "$repo_file" ]] && backup_file "$repo_file"
+
+        cat <<'EOF' | tee "$repo_file" >/dev/null
+deb http://packages.linuxmint.com virginia main upstream import backport
+
+deb http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse
+deb http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse
+deb http://archive.ubuntu.com/ubuntu jammy-backports main restricted universe multiverse
+
+deb http://security.ubuntu.com/ubuntu/ jammy-security main restricted universe multiverse
+EOF
+
+        log_success "Linux Mint 21 APT sources repaired in $repo_file"
+
+    elif [[ "$os" == "ubuntu" && "$version" == "24."* ]]; then
+        local repo_file="/etc/apt/sources.list.d/ubuntu.sources"
+        codename=${codename:-$(lsb_release -cs 2>/dev/null || echo noble)}
+
+        [[ -f "$repo_file" ]] && backup_file "$repo_file"
+
+        cat <<EOF | tee "$repo_file" >/dev/null
+deb http://archive.ubuntu.com/ubuntu $codename main restricted universe multiverse
+deb http://archive.ubuntu.com/ubuntu $codename-updates main restricted universe multiverse
+deb http://archive.ubuntu.com/ubuntu $codename-security main restricted universe multiverse
+deb http://archive.ubuntu.com/ubuntu $codename-backports main universe restricted multiverse
+EOF
+
+        log_success "Ubuntu 24 APT sources repaired in $repo_file"
+
+    else
+        log_warn "Skipping APT source repair on unsupported OS: $os $version"
+        return 0
+    fi
+
+    if apt-get update -qq; then
+        log_success "APT package lists refreshed"
+    else
+        log_warn "Failed to refresh package lists after repairing sources"
+    fi
+}
+
 # Check dependencies
 check_deps() {
     log_section "Dependency Check"
 
-    local required_deps=("curl" "jq" "sed" "awk" "grep")
+    local required_deps=("sed" "awk" "grep")
     local optional_deps=("clamav" "rkhunter" "lynis")
 
     log_info "Checking required dependencies..."
@@ -412,6 +475,9 @@ main() {
 
     # Check system
     check_system
+
+    # Repair APT sources early to ensure package operations succeed
+    repair_apt_sources
 
     # Check dependencies
     check_deps
