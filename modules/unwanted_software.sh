@@ -58,7 +58,13 @@ STRATEGIC GUIDANCE:
 - Recommend apt autoremove and apt autoclean
 - Note any residual configuration files that should be manually cleaned
 
-Output strictly valid JSON in the following format:
+RESPONSE FORMAT (STRICT):
+- Respond with ONE JSON object only. Do not include markdown, code fences, commentary, or explanations.
+- Every field must exist even when empty; use [] for empty arrays.
+- Truncate any justification to 120 characters and keep wording concise.
+- If you are unsure, default to empty arrays but still return the full JSON structure.
+
+JSON SHAPE:
 {
   "packages_to_remove": [
     {
@@ -80,7 +86,7 @@ Output strictly valid JSON in the following format:
   ]
 }
 
-Always tailor suggestions to CyberPatriot scoring priorities. Be aggressive about removing unauthorized software - when in doubt about whether a service is authorized, if it's not in the README, recommend removal with appropriate confidence level.
+Always tailor suggestions to CyberPatriot scoring priorities. Be aggressive about removing unauthorized software - when in doubt about whether a service is authorized, if it's not in the README, recommend removal with appropriate confidence level. The entire response MUST be a single valid JSON object matching the above shape with no extra text before or after it.
 EOF
 
 readonly UNWANTED_SYSTEM_PROMPT
