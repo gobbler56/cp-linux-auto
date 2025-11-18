@@ -452,25 +452,33 @@ EOF
 
     log_success "Created $tmp_mount"
 
-    # Reload systemd daemon
-    log_info "Reloading systemd daemon..."
-    systemctl daemon-reload
+    if command_exists systemctl; then
+        # Reload systemd daemon
+        log_info "Reloading systemd daemon..."
+        if systemctl daemon-reload 2>/dev/null; then
+            log_success "✓ Reloaded systemd daemon"
+        else
+            log_warn "systemctl daemon-reload failed; tmp.mount may not activate"
+        fi
 
-    # Enable the mount unit
-    log_info "Enabling tmp.mount..."
-    if systemctl enable tmp.mount 2>/dev/null; then
-        log_success "✓ Enabled tmp.mount"
-    else
-        log_warn "Failed to enable tmp.mount"
-    fi
+        # Enable the mount unit
+        log_info "Enabling tmp.mount..."
+        if systemctl enable tmp.mount 2>/dev/null; then
+            log_success "✓ Enabled tmp.mount"
+        else
+            log_warn "Failed to enable tmp.mount"
+        fi
 
-    # Try to start the mount unit (may fail if /tmp is in use)
-    log_info "Attempting to start tmp.mount..."
-    if systemctl start tmp.mount 2>/dev/null; then
-        log_success "✓ Started tmp.mount (secure /tmp is now active)"
+        # Try to start the mount unit (may fail if /tmp is in use)
+        log_info "Attempting to start tmp.mount..."
+        if systemctl start tmp.mount 2>/dev/null; then
+            log_success "✓ Started tmp.mount (secure /tmp is now active)"
+        else
+            log_warn "Failed to start tmp.mount (changes will apply on next reboot)"
+            log_info "This is normal if /tmp is currently in use"
+        fi
     else
-        log_warn "Failed to start tmp.mount (changes will apply on next reboot)"
-        log_info "This is normal if /tmp is currently in use"
+        log_warn "systemctl not available; skipping tmp.mount activation"
     fi
 
     return 0
