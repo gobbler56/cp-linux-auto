@@ -201,7 +201,9 @@ enable_pwquality_pam() {
     local pwq_numeric_opts=(
         "minlen=$DEFAULT_PW_MINLEN"
         "minclass=$DEFAULT_PW_MINCLASS"
+        "difok=$DEFAULT_PW_DIFOK"
         "maxrepeat=$DEFAULT_PW_MAXREPEAT"
+        "maxclassrepeat=$DEFAULT_PW_MAXCLASSREPEAT"
         "dcredit=-1"
         "ucredit=-1"
         "ocredit=-1"
@@ -222,7 +224,9 @@ enable_pwquality_pam() {
     local pwq_bool_opts=(
         "gecoscheck=1"
         "dictcheck=1"
+        "reject_username"
         "enforce_for_root"
+        "usercheck"
     )
 
     for opt in "${pwq_bool_opts[@]}"; do
