@@ -14,17 +14,33 @@ run_dependencies() {
 
     log_info "Checking and installing required dependencies..."
 
-    # Install debsums for package verification
-    if ! command_exists debsums; then
-        log_info "Installing debsums..."
-        if apt-get update -qq && apt-get install -y debsums; then
-            log_success "debsums installed successfully"
-        else
-            log_error "Failed to install debsums"
+    local packages=(curl jq debsums)
+    local missing=()
+
+    for pkg in "${packages[@]}"; do
+        if ! command_exists "$pkg"; then
+            missing+=("$pkg")
+        fi
+    done
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        log_info "Updating package lists before installing: ${missing[*]}"
+        if ! apt-get update -qq; then
+            log_error "Failed to update package lists"
             return 1
         fi
+
+        for pkg in "${missing[@]}"; do
+            log_info "Installing $pkg..."
+            if apt-get install -y "$pkg" >/dev/null 2>&1; then
+                log_success "$pkg installed successfully"
+            else
+                log_error "Failed to install $pkg"
+                return 1
+            fi
+        done
     else
-        log_success "debsums already installed"
+        log_success "All dependency packages already installed"
     fi
 
     return 0
