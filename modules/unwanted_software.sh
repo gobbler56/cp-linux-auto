@@ -29,14 +29,41 @@ Your goals:
 2. Identify packages that require manual review because removal could impact mission requirements.
 3. Reference the README when available to avoid recommending removal of authorized or mission-critical tools.
 4. Provide actionable justifications grounded in offensive capability, policy violations, or mismatch with mission directives.
-5. Packages can include but not limited to: hacking tools, games, torrent clients or media servers, and also, any legitimate service not mentioned in the readme. (Say ftp is authorized but nginx also exists on the system, but is not mentioned in the readme, that warrants nginx's removal while ftp remains.)
+
+CRITICAL REMOVAL CRITERIA:
+- Hacking/offensive tools (network scanners, exploit tools, password crackers) → REMOVE unless explicitly authorized in README
+- Games and entertainment software (solitaire, chess, mines, etc.) → REMOVE immediately
+- P2P/torrent clients (transmission, deluge, etc.) → REMOVE immediately
+- Media servers not authorized for business use → REMOVE
+- Web servers, databases, or network services NOT mentioned in README → REMOVE (even if legitimate software)
+  Example: If README authorizes FTP but nginx is installed without mention → nginx should be REMOVED
+- Steganography, forensics, or data hiding tools → REMOVE unless explicitly authorized
+- Any package from the hardcoded high-risk list → REMOVE with high confidence
+
+CONFIDENCE LEVELS:
+- HIGH: Package is clearly unauthorized (hacking tools, games, P2P), or is a service not mentioned in README
+- MEDIUM: Legitimate software that may have business use but isn't mentioned in README, removal may affect workflows
+- LOW: System utilities or tools that might be dependencies, unclear if needed
+
+PACKAGES FOR MANUAL REVIEW:
+Only include packages where:
+- Removal could break critical business workflows mentioned in README
+- Package might be a dependency of authorized software
+- README is ambiguous about whether package is authorized
+- Tool has dual-use (legitimate + security) and context is unclear
+
+STRATEGIC GUIDANCE:
+- After removals, recommend: systemctl disable/stop for services, verify with ss -tulpn
+- Suggest security hardening for authorized services
+- Recommend apt autoremove and apt autoclean
+- Note any residual configuration files that should be manually cleaned
 
 Output strictly valid JSON in the following format:
 {
   "packages_to_remove": [
     {
       "package": "name",
-      "reason": "clear, concise justification",
+      "reason": "clear, concise justification (max 120 chars)",
       "confidence": "high|medium|low",
       "source": "hardcoded_list|manual_scan|readme_conflict"
     }
@@ -53,7 +80,7 @@ Output strictly valid JSON in the following format:
   ]
 }
 
-Always tailor suggestions to CyberPatriot scoring priorities, avoid duplicates, and prefer removal of obviously offensive or gaming software unless the README authorizes it.
+Always tailor suggestions to CyberPatriot scoring priorities. Be aggressive about removing unauthorized software - when in doubt about whether a service is authorized, if it's not in the README, recommend removal with appropriate confidence level.
 EOF
 
 readonly UNWANTED_SYSTEM_PROMPT
@@ -277,6 +304,150 @@ invoke_unwanted_package_analysis() {
     return 0
 }
 
+interactive_package_removal() {
+    local parsed_json="$1"
+
+    local -a removed_packages=()
+    local -a skipped_packages=()
+    local -a failed_packages=()
+
+    # Get package count
+    local pkg_count=$(echo "$parsed_json" | jq '.packages_to_remove | length')
+
+    if [[ ! "$pkg_count" =~ ^[0-9]+$ ]] || (( pkg_count == 0 )); then
+        log_info "No packages to remove"
+        return 0
+    fi
+
+    log_info "Found $pkg_count package(s) recommended for removal"
+    echo ""
+
+    # Iterate through each package
+    for i in $(seq 0 $((pkg_count - 1))); do
+        local pkg_name=$(echo "$parsed_json" | jq -r ".packages_to_remove[$i].package")
+        local pkg_reason=$(echo "$parsed_json" | jq -r ".packages_to_remove[$i].reason")
+        local pkg_confidence=$(echo "$parsed_json" | jq -r ".packages_to_remove[$i].confidence")
+
+        # Display package information
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo -e "\033[1;33mPackage:\033[0m $pkg_name"
+        echo -e "\033[1;33mReason:\033[0m $pkg_reason"
+        echo -e "\033[1;33mConfidence:\033[0m $pkg_confidence"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+        # Check if package is still installed
+        if ! dpkg -s "$pkg_name" >/dev/null 2>&1; then
+            log_info "Package '$pkg_name' is not installed, skipping..."
+            skipped_packages+=("$pkg_name (not installed)")
+            echo ""
+            continue
+        fi
+
+        # Show dependencies if not high confidence
+        if [[ "$pkg_confidence" != "high" ]]; then
+            log_info "Checking dependencies for '$pkg_name'..."
+            local deps=$(apt-cache depends "$pkg_name" 2>/dev/null | grep "Depends:" | awk '{print $2}' | head -5)
+            if [[ -n "$deps" ]]; then
+                echo -e "\033[1;36mSome dependencies:\033[0m"
+                echo "$deps" | sed 's/^/  - /'
+            fi
+        fi
+
+        # Prompt for removal
+        echo ""
+        echo -n -e "\033[1;31mRemove this package? [y/N]:\033[0m "
+
+        local response
+        if read -t 60 response; then
+            response=$(echo "$response" | tr '[:upper:]' '[:lower:]')
+        else
+            log_warn "No response received (timeout), skipping..."
+            skipped_packages+=("$pkg_name (timeout)")
+            echo ""
+            continue
+        fi
+
+        if [[ "$response" != "y" && "$response" != "yes" ]]; then
+            log_info "Skipping '$pkg_name'"
+            skipped_packages+=("$pkg_name (user declined)")
+            echo ""
+            continue
+        fi
+
+        # Remove package based on confidence level
+        log_info "Removing '$pkg_name'..."
+
+        local removal_cmd
+        local stop_service_cmd=""
+
+        # Try to stop related services first
+        if systemctl list-unit-files 2>/dev/null | grep -q "^${pkg_name}\.service"; then
+            stop_service_cmd="systemctl stop ${pkg_name}.service 2>/dev/null; systemctl disable ${pkg_name}.service 2>/dev/null"
+            log_info "Stopping and disabling service: ${pkg_name}.service"
+            eval "$stop_service_cmd"
+        fi
+
+        if [[ "$pkg_confidence" == "high" ]]; then
+            # High confidence: just purge the specific package
+            removal_cmd="apt-get purge -y '$pkg_name' 2>&1"
+            log_info "Using direct purge (high confidence)"
+        else
+            # Medium/low confidence: purge and clean up dependencies
+            removal_cmd="apt-get purge -y '$pkg_name' && apt-get autoremove -y 2>&1"
+            log_info "Using purge with autoremove (${pkg_confidence} confidence)"
+        fi
+
+        local removal_output
+        removal_output=$(eval "$removal_cmd")
+        local removal_status=$?
+
+        if [[ $removal_status -eq 0 ]]; then
+            log_success "Successfully removed '$pkg_name'"
+            removed_packages+=("$pkg_name")
+        else
+            log_error "Failed to remove '$pkg_name'"
+            log_debug "Removal output: $removal_output"
+            failed_packages+=("$pkg_name")
+        fi
+
+        echo ""
+    done
+
+    # Display summary
+    log_section "Removal Summary"
+
+    if (( ${#removed_packages[@]} > 0 )); then
+        log_success "Successfully removed ${#removed_packages[@]} package(s):"
+        for pkg in "${removed_packages[@]}"; do
+            echo "  ✓ $pkg"
+        done
+    fi
+
+    if (( ${#skipped_packages[@]} > 0 )); then
+        log_info "Skipped ${#skipped_packages[@]} package(s):"
+        for pkg in "${skipped_packages[@]}"; do
+            echo "  - $pkg"
+        done
+    fi
+
+    if (( ${#failed_packages[@]} > 0 )); then
+        log_warn "Failed to remove ${#failed_packages[@]} package(s):"
+        for pkg in "${failed_packages[@]}"; do
+            echo "  ✗ $pkg"
+        done
+    fi
+
+    # Clean up package cache
+    if (( ${#removed_packages[@]} > 0 )); then
+        log_info "Cleaning package cache..."
+        apt-get clean 2>/dev/null
+        apt-get autoclean 2>/dev/null
+        log_success "Package removal process complete"
+    fi
+
+    return 0
+}
+
 run_unwanted_software() {
     log_info "Starting Unwanted Software module..."
 
@@ -366,6 +537,12 @@ run_unwanted_software() {
         echo "$parsed_json" | jq -r '.strategic_guidance[]' | while read -r tip; do
             log_info "  - $tip"
         done
+    fi
+
+    # Interactive package removal
+    if [[ "$removal_count" =~ ^[0-9]+$ ]] && (( removal_count > 0 )); then
+        log_section "Interactive Package Removal"
+        interactive_package_removal "$parsed_json"
     fi
 
     return 0
