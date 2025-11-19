@@ -19,6 +19,26 @@ BACKUP_DIR="${BACKUP_DIR:-/var/backups/cyberpatriot}"
 # All available modules (populated dynamically)
 MODULES=()
 
+# Preferred module execution order to avoid conflicts and redundant work
+DESIRED_MODULE_ORDER=(
+    dependencies
+    readme_parser
+    forensics_questions
+    os_updates
+    user_auditing
+    account_policy
+    local_policy
+    security_policy
+    ssh_hardening
+    ftp_hardening
+    service_auditing
+    unwanted_software
+    malware
+    prohibited_files
+    defensive_countermeasures
+    os_settings
+)
+
 # Remove common formatting issues from module identifiers
 sanitize_module_name() {
     local raw="$1"
@@ -41,21 +61,42 @@ discover_modules() {
         return 1
     fi
 
-    local module_files=()
-    while IFS= read -r module_file; do
-        module_files+=("$module_file")
-    done < <(find "$ENGINE_DIR/modules" -maxdepth 1 -type f -name '*.sh' -print | sort)
-
-    for module_path in "${module_files[@]}"; do
+    local available_modules=()
+    while IFS= read -r module_path; do
         local module_name
         module_name="$(basename "$module_path" .sh)"
         module_name="$(sanitize_module_name "$module_name")"
 
-        # Skip empty names (just in case)
-        if [[ -n "$module_name" ]]; then
-            MODULES+=("$module_name")
+        [[ -n "$module_name" ]] && available_modules+=("$module_name")
+    done < <(find "$ENGINE_DIR/modules" -maxdepth 1 -type f -name '*.sh' -print)
+
+    # Track which modules have already been added to avoid duplicates
+    declare -A added_modules=()
+
+    for preferred in "${DESIRED_MODULE_ORDER[@]}"; do
+        for candidate in "${available_modules[@]}"; do
+            if [[ "$preferred" == "$candidate" && -z "${added_modules[$candidate]:-}" ]]; then
+                MODULES+=("$candidate")
+                added_modules[$candidate]=1
+                break
+            fi
+        done
+    done
+
+    # Append any remaining modules not in the preferred list, sorted for stability
+    local remaining=()
+    for candidate in "${available_modules[@]}"; do
+        if [[ -z "${added_modules[$candidate]:-}" ]]; then
+            remaining+=("$candidate")
+            added_modules[$candidate]=1
         fi
     done
+
+    if [[ ${#remaining[@]} -gt 0 ]]; then
+        IFS=$'\n' remaining=($(printf '%s\n' "${remaining[@]}" | sort))
+        unset IFS
+        MODULES+=("${remaining[@]}")
+    fi
 
     return 0
 }
