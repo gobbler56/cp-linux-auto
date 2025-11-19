@@ -43,8 +43,7 @@ get_current_users() {
 }
 
 # --- MODIFIED FUNCTION ---
-# Get all current admins (users in sudo group)
-# Removed associative array for portability
+# Re-written to be 100% POSIX compliant (no bash arrays)
 get_current_admins() {
     local group users user
     
@@ -53,12 +52,14 @@ get_current_admins() {
         for group in sudo admin adm; do
             if getent group "$group" &>/dev/null; then
                 users=$(getent group "$group" | awk -F: '{print $4}')
-                IFS=',' read -ra current <<< "$users"
-                for user in "${current[@]}"; do
-                    user=$(echo "$user" | xargs)
+                
+                # Replace comma-separated list with newlines
+                # Then read each line (user) in a loop
+                echo "$users" | tr ',' '\n' | while IFS= read -r user; do
+                    user=$(echo "$user" | xargs) # Trim whitespace
                     [[ -z "$user" ]] && continue
                     echo "$user" # Echo each user
-                fi
+                done
             fi
         done
     ) | sort -u # Pipe all echoed users to sort -u
@@ -344,58 +345,74 @@ manage_admin_privileges() {
     log_section "Managing Admin Privileges"
 
     local changes_made=0
-
-    mapfile -t current_admins < <(get_current_admins) # Already sorted by the function
-    mapfile -t authorized_admins < <(get_authorized_admins | sort -u)
-
+    local current_admin auth_admin group
+    
+    # --- MODIFIED BLOCK ---
+    # Removed mapfile and bash array loop for portability
+    # We pipe the loops' output and capture the *final* count
+    # to work around subshell variable scope issues.
+    
+    local remove_changes add_changes
+    
     # Remove unauthorized admins from privileged groups
-    for current_admin in "${current_admins[@]}"; do
-        [[ -z "$current_admin" ]] && continue
+    remove_changes=$(get_current_admins | {
+        local count=0
+        while IFS= read -r current_admin; do
+            [[ -z "$current_admin" ]] && continue
 
-        if ! is_user_admin "$current_admin"; then
-            log_warn "User $current_admin has administrative access but isn't authorized"
+            if ! is_user_admin "$current_admin"; then
+                log_warn "User $current_admin has administrative access but isn't authorized"
 
-            for group in sudo admin adm; do
-                if getent group "$group" &>/dev/null && groups "$current_admin" | grep -qw "$group"; then
-                    log_info "Removing $current_admin from $group group"
-                    if deluser "$current_admin" "$group" 2>/dev/null; then
-                        log_success "Removed $current_admin from $group group"
-                        ((changes_made++))
-                    else
-                        log_error "Failed to remove $current_admin from $group group"
+                for group in sudo admin adm; do
+                    if getent group "$group" &>/dev/null && groups "$current_admin" | grep -qw "$group"; then
+                        log_info "Removing $current_admin from $group group"
+                        if deluser "$current_admin" "$group" 2>/dev/null; then
+                            log_success "Removed $current_admin from $group group"
+                            count=$((count + 1))
+                        else
+                            log_error "Failed to remove $current_admin from $group group"
+                        fi
                     fi
-                fi
-            done
-        fi
-    done
+                done
+            fi
+        done
+        echo "$count" # Echo the count from within the subshell
+    })
 
     # Add authorized admins to privileged groups
-    for auth_admin in "${authorized_admins[@]}"; do
-        [[ -z "$auth_admin" ]] && continue
+    add_changes=$(get_authorized_admins | sort -u | {
+        local count=0
+        while IFS= read -r auth_admin; do
+            [[ -z "$auth_admin" ]] && continue
 
-        if ! user_exists "$auth_admin"; then
-            log_warn "Admin user $auth_admin doesn't exist yet"
-            continue
-        fi
-
-        for group in sudo adm; do
-            if ! getent group "$group" &>/dev/null; then
+            if ! user_exists "$auth_admin"; then
+                log_warn "Admin user $auth_admin doesn't exist yet"
                 continue
             fi
 
-            if groups "$auth_admin" | grep -qw "$group"; then
-                log_debug "User $auth_admin already in $group group"
-            else
-                log_info "Adding $auth_admin to $group group"
-                if usermod -aG "$group" "$auth_admin" 2>/dev/null; then
-                    log_success "Added $auth_admin to $group group"
-                    ((changes_made++))
-                else
-                    log_error "Failed to add $auth_admin to $group group"
+            for group in sudo adm; do
+                if ! getent group "$group" &>/dev/null; then
+                    continue
                 fi
-            fi
+
+                if groups "$auth_admin" | grep -qw "$group"; then
+                    log_debug "User $auth_admin already in $group group"
+                else
+                    log_info "Adding $auth_admin to $group group"
+                    if usermod -aG "$group" "$auth_admin" 2>/dev/null; then
+                        log_success "Added $auth_admin to $group group"
+                        count=$((count + 1))
+                    else
+                        log_error "Failed to add $auth_admin to $group group"
+                    fi
+                fi
+            done
         done
-    done
+        echo "$count" # Echo the count from within the subshell
+    })
+    # --- END MODIFIED BLOCK ---
+
+    changes_made=$((remove_changes + add_changes))
 
     if [[ $changes_made -eq 0 ]]; then
         log_info "Admin privileges are correct"
