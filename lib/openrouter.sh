@@ -17,7 +17,10 @@ OPENROUTER_API_URL="https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_MODEL="${OPENROUTER_MODEL:-anthropic/claude-3.5-sonnet}"
 
 # System prompt for README extraction (adapted from PowerShell version)
-read -r -d '' SYSTEM_PROMPT <<'EOF'
+# Use a heredoc to populate SYSTEM_PROMPT. read -d '' returns 1 at EOF when
+# no NUL delimiter is encountered, so append `|| true` to avoid set -e exiting
+# the script before initialization completes.
+read -r -d '' SYSTEM_PROMPT <<'EOF' || true
 You are a specialized assistant that extracts structured information from CyberPatriot competition README files.
 
 Your task is to parse the README content and extract:
