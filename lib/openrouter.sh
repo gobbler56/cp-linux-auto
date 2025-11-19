@@ -169,12 +169,33 @@ extract_json_from_response() {
         return 0
     fi
 
+    # Try to parse JSON that is wrapped in a fenced ```json code block
+    local fenced_json=$(echo "$text" | sed -n '/```json/,/```/p' | sed '1d;$d')
+    if [[ -n "$fenced_json" ]] && echo "$fenced_json" | jq -e '.' >/dev/null 2>&1; then
+        echo "$fenced_json"
+        return 0
+    fi
+
+    # Try to parse JSON from any fenced code block
+    local fenced_block=$(echo "$text" | sed -n '/```/,/```/p' | sed '1d;$d')
+    if [[ -n "$fenced_block" ]] && echo "$fenced_block" | jq -e '.' >/dev/null 2>&1; then
+        echo "$fenced_block"
+        return 0
+    fi
+
     # Try to extract JSON object from text
     # Use (?s) to make . (dot) match newlines, in case the JSON is multi-line
     local extracted=$(echo "$text" | grep -oP '(?s)\{.*\}' | head -1)
 
     if [[ -n "$extracted" ]] && echo "$extracted" | jq -e '.' >/dev/null 2>&1; then
         echo "$extracted"
+        return 0
+    fi
+
+    # Try to extract a JSON array if no object was found
+    local extracted_array=$(echo "$text" | grep -oP '(?s)\[.*\]' | head -1)
+    if [[ -n "$extracted_array" ]] && echo "$extracted_array" | jq -e '.' >/dev/null 2>&1; then
+        echo "$extracted_array"
         return 0
     fi
 
