@@ -127,10 +127,24 @@ extract_forensics_command_requests() {
     local response_json="$1"
 
     echo "$response_json" | jq -c '
-        if has("command_requests") then
-            if (.command_requests | type == "array") then .command_requests else [] end
-        elif has("command_request") then
-            if (.command_request | type == "object") then [.command_request] else [] end
+        if type == "object" then
+            if has("command_requests") then
+                if (.command_requests | type == "array") then .command_requests else [] end
+            elif has("command_request") then
+                if (.command_request | type == "object") then [.command_request] else [] end
+            else
+                []
+            end
+        elif type == "array" then
+            # Some models may return a bare array; use the first object if present
+            (.[0] // {}) as $first |
+            if ($first | has("command_requests")) then
+                if ($first.command_requests | type == "array") then $first.command_requests else [] end
+            elif ($first | has("command_request")) then
+                if ($first.command_request | type == "object") then [$first.command_request] else [] end
+            else
+                []
+            end
         else
             []
         end | map(select(.command and (.command | length > 0)))'
@@ -401,7 +415,16 @@ run_forensics_questions() {
 
         if (( ${#answer_files[@]} > 0 )); then
             local answers_json
-            answers_json=$(jq -s '{answers: map(.answers[]) }' "${answer_files[@]}")
+            answers_json=$(jq -s '
+                def pull_answers(obj):
+                    if obj | type == "object" then
+                        if obj | has("answers") then obj.answers
+                        elif obj | has("answer") then [obj.answer] else [] end
+                    elif obj | type == "array" then obj
+                    else [] end;
+
+                {answers: (map(pull_answers(.)) | add // [])}
+            ' "${answer_files[@]}")
 
             echo "$answers_json" | jq '.' > "$SCRIPT_DIR/../data/forensics_answers.json"
 
