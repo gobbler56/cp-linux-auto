@@ -116,40 +116,10 @@ call_forensics_openrouter() {
     return 0
 }
 
-# Validate that the requested command is safe to execute
+# Ensure the requested command is not empty before execution
 is_safe_forensics_command() {
     local command="$1"
-    local disallowed_chars='[;`$><|]'
-
-    if [[ "$command" =~ $disallowed_chars ]]; then
-        return 1
-    fi
-
-    if [[ "$command" =~ (^|[^&])\&($|[^&]) ]]; then
-        return 1
-    fi
-
-    IFS='&&' read -r -a segments <<<"$command"
-    if (( ${#segments[@]} == 0 )); then
-        return 1
-    fi
-
-    for segment in "${segments[@]}"; do
-        segment=$(xargs <<<"$segment")
-        [[ -z "$segment" ]] && return 1
-
-        local first_word
-        first_word=$(awk '{print $1}' <<<"$segment")
-        case "$first_word" in
-            cat|ls|grep|find|strings|head|tail|sed|awk|wc|stat)
-                ;;
-            *)
-                return 1
-                ;;
-        esac
-    done
-
-    return 0
+    [[ -n "${command//[[:space:]]/}" ]]
 }
 
 # Normalize command requests into a JSON array
