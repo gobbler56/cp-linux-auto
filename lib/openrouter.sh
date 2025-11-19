@@ -66,6 +66,9 @@ check_openrouter_config() {
     return 0
 }
 
+# ---
+# --- THIS IS THE FIXED FUNCTION ---
+# ---
 # Remove HTML tags from content (re-written with perl for multi-line support)
 remove_html_tags() {
     local content="$1"
@@ -91,6 +94,7 @@ remove_html_tags() {
 
     echo "$content"
 }
+# --- END OF FIXED FUNCTION ---
 
 # Call OpenRouter API with README content
 invoke_readme_extraction() {
@@ -150,6 +154,9 @@ invoke_readme_extraction() {
     return 0
 }
 
+# ---
+# --- THIS IS THE SECOND FIXED FUNCTION (more robust) ---
+# ---
 # Extract JSON from model response (handles cases where model adds extra text)
 extract_json_from_response() {
     local text="$1"
@@ -161,7 +168,8 @@ extract_json_from_response() {
     fi
 
     # Try to extract JSON object from text
-    local extracted=$(echo "$text" | grep -oP '\{.*\}' | head -1)
+    # Use (?s) to make . (dot) match newlines, in case the JSON is multi-line
+    local extracted=$(echo "$text" | grep -oP '(?s)\{.*\}' | head -1)
 
     if [[ -n "$extracted" ]] && echo "$extracted" | jq -e '.' >/dev/null 2>&1; then
         echo "$extracted"
@@ -169,8 +177,10 @@ extract_json_from_response() {
     fi
 
     log_error "Could not extract valid JSON from model response"
+    log_debug "Raw model response: $text" # Added for better debugging
     return 1
 }
+# --- END OF FIXED FUNCTION ---
 
 # Test OpenRouter connection
 test_openrouter() {
