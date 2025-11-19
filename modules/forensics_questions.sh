@@ -125,7 +125,7 @@ is_safe_forensics_command() {
         return 1
     fi
 
-    if [[ "$command" =~ (^|[^&])&($|[^&]) ]]; then
+    if [[ "$command" =~ (^|[^&])\&($|[^&]) ]]; then
         return 1
     fi
 
