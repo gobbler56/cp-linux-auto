@@ -28,7 +28,7 @@ readonly SYSTEM_ACCOUNTS=(
     "speech-dispatcher" "hplip" "sshd" "geoclue" "gnome-initial-setup" "gdm"
     "mysql" "postgres" "redis" "mongodb" "nginx" "apache" "_apt" "systemd-coredump"
     "lightdm" "colord" "nm-openvpn" "dnsmasq" "tss" "landscape" "pollinate"
-    "lxd" "uuidd" "tcpdump" "syslog" "snap" "_flatpak"
+    "lxd" "uuidd" "tcpdump" "syslog" "snap" "_flatpak" "cups-pk-helper"
 )
 
 # Get the main user (the user who is running the system, usually first UID >= 1000)
@@ -42,26 +42,26 @@ get_current_users() {
     awk -F: '$3 >= 1000 && $3 < 65534 && $1 != "nobody" { print $1 }' /etc/passwd
 }
 
+# --- MODIFIED FUNCTION ---
 # Get all current admins (users in sudo group)
+# Removed associative array for portability
 get_current_admins() {
-    declare -A seen
     local group users user
-
-    for group in sudo admin adm; do
-        if getent group "$group" &>/dev/null; then
-            users=$(getent group "$group" | awk -F: '{print $4}')
-            IFS=',' read -ra current <<< "$users"
-            for user in "${current[@]}"; do
-                user=$(echo "$user" | xargs)
-                [[ -z "$user" ]] && continue
-                seen["$user"]=1
-            done
-        fi
-    done
-
-    for user in "${!seen[@]}"; do
-        echo "$user"
-    done
+    
+    # Use a subshell to group all echo output and pipe to sort -u
+    (
+        for group in sudo admin adm; do
+            if getent group "$group" &>/dev/null; then
+                users=$(getent group "$group" | awk -F: '{print $4}')
+                IFS=',' read -ra current <<< "$users"
+                for user in "${current[@]}"; do
+                    user=$(echo "$user" | xargs)
+                    [[ -z "$user" ]] && continue
+                    echo "$user" # Echo each user
+                fi
+            fi
+        done
+    ) | sort -u # Pipe all echoed users to sort -u
 }
 
 # Check if user is a system account
@@ -239,7 +239,14 @@ remove_hidden_users() {
         fi
 
         # Skip if authorized in README
-        if is_user_authorized "$username"; then
+        # We call this and check its return code in a way that
+        # prevents 'set -e' from exiting the whole script if it fails.
+        auth_status=1 # Default to "not authorized" (1 = false)
+        if is_user_authorized "$username" 2>/dev/null; then
+            auth_status=0 # 0 = "authorized" (true)
+        fi
+
+        if [[ $auth_status -eq 0 ]]; then
             log_warn "User $username has UID < 1000 but is authorized in README"
             continue
         fi
@@ -288,7 +295,12 @@ handle_system_users() {
         fi
 
         # If user is authorized, don't restrict
-        if is_user_authorized "$username"; then
+        auth_status=1 # Default to "not authorized"
+        if is_user_authorized "$username" 2>/dev/null; then
+            auth_status=0 # 0 = "authorized"
+        fi
+
+        if [[ $auth_status -eq 0 ]]; then
             log_info "User $username is authorized in README, not restricting"
             continue
         fi
@@ -333,7 +345,7 @@ manage_admin_privileges() {
 
     local changes_made=0
 
-    mapfile -t current_admins < <(get_current_admins | sort -u)
+    mapfile -t current_admins < <(get_current_admins) # Already sorted by the function
     mapfile -t authorized_admins < <(get_authorized_admins | sort -u)
 
     # Remove unauthorized admins from privileged groups
@@ -649,31 +661,26 @@ fix_null_passwords() {
     return 0
 }
 
+# --- MODIFIED FUNCTION ---
 # Enforce password policies
+# Removed associative array for portability
 enforce_password_policies() {
     log_section "Enforcing Password Policies"
 
     local changes_made=0
 
     # Build a unified list of users to enforce policy on (all regular users and root)
-    declare -A target_users=()
-
-    if user_exists "root"; then
-        target_users["root"]=1
-    fi
-
-    while IFS= read -r username; do
-        [[ -z "$username" ]] && continue
-        target_users["$username"]=1
-    done < <(get_current_users)
-
-    while IFS= read -r username; do
-        [[ -z "$username" ]] && continue
-        target_users["$username"]=1
-    done < <(get_authorized_users)
+    local target_users_list
+    target_users_list=$( (
+        if user_exists "root"; then
+            echo "root"
+        fi
+        get_current_users
+        get_authorized_users
+    ) | sort -u )
 
     # Apply password policy to each target (skip system accounts except root)
-    for username in "${!target_users[@]}"; do
+    while IFS= read -r username; do
         [[ -z "$username" ]] && continue
 
         if [[ "$username" != "root" ]] && is_system_account "$username"; then
@@ -699,7 +706,7 @@ enforce_password_policies() {
         # Ensure password expires (remove -1 which means never)
         chage -E -1 "$username" 2>/dev/null
 
-    done
+    done <<< "$target_users_list" # Read from the sorted list variable
 
     if [[ $changes_made -gt 0 ]]; then
         log_success "Applied password policies to $changes_made user(s)"
@@ -739,25 +746,24 @@ check_password_hashing() {
     return 0
 }
 
+# --- MODIFIED FUNCTION ---
+# build_system_users_to_restrict
+# Removed associative array for portability
 build_system_users_to_restrict() {
-    declare -A seen
+    # Use a subshell to group all output and pipe to sort -u
+    (
+        # Always include baseline system accounts that must be restricted
+        for default_user in "${DEFAULT_SYSTEM_USERS_TO_RESTRICT[@]}"; do
+            [[ -z "$default_user" ]] && continue
+            echo "$default_user"
+        done
 
-    # Always include baseline system accounts that must be restricted
-    for default_user in "${DEFAULT_SYSTEM_USERS_TO_RESTRICT[@]}"; do
-        [[ -z "$default_user" ]] && continue
-        seen["$default_user"]=1
-    done
-
-    # Merge in any explicit README entries
-    while IFS= read -r from_readme; do
-        [[ -z "$from_readme" ]] && continue
-        seen["$from_readme"]=1
-    done < <(get_system_users_to_restrict 2>/dev/null || true)
-
-    for username in "${!seen[@]}"; do
-        echo "$username"
-    done
+        # Merge in any explicit README entries
+        # This function is from readme_parser.sh and just echos users
+        get_system_users_to_restrict 2>/dev/null || true
+    ) | sort -u
 }
+
 
 # Disable password login for system users
 disable_system_user_logins() {
@@ -816,6 +822,12 @@ ensure_system_accounts_nologin() {
         if [[ "$current_shell" == "/usr/sbin/nologin" ]] || [[ "$current_shell" == "/bin/false" ]]; then
             log_debug "User $username already has nologin shell"
             continue
+        fi
+        
+        # [cite_start]Per README[cite: 14], never let users log in as root.
+        # This is a good place to enforce it, although other functions also handle root.
+        if [[ "$username" == "root" ]]; then
+             log_warn "Root user does not have a nologin shell. Enforcing policy."
         fi
 
         log_info "Setting nologin shell for system account: $username (UID: $uid, current shell: $current_shell)"
@@ -987,6 +999,21 @@ run_user_auditing() {
             log_error "Failed to parse README"
             return 1
         }
+    fi
+
+    # Log the AI output for debugging
+    local parsed_json_file="$SCRIPT_DIR/../data/readme_parsed.json"
+    if [[ -f "$parsed_json_file" ]]; then
+        log_debug "--- AI PARSER OUTPUT START ---"
+        # Log the file content, using jq to format it if possible
+        if command -v jq >/dev/null; then
+            log_debug "$(jq . "$parsed_json_file")"
+        else
+            log_debug "$(cat "$parsed_json_file")"
+        fi
+        log_debug "--- AI PARSER OUTPUT END ---"
+    else
+        log_warn "Could not find parsed JSON file to log"
     fi
 
     # Run all auditing functions
