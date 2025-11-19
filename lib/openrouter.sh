@@ -17,7 +17,8 @@ OPENROUTER_API_URL="https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_MODEL="${OPENROUTER_MODEL:-anthropic/claude-3.5-sonnet}"
 
 # System prompt for README extraction (adapted from PowerShell version)
-readonly SYSTEM_PROMPT='You are a specialized assistant that extracts structured information from CyberPatriot competition README files.
+read -r -d '' SYSTEM_PROMPT <<'EOF'
+You are a specialized assistant that extracts structured information from CyberPatriot competition README files.
 
 Your task is to parse the README content and extract:
 1. Every authorized user and their account type ("admin" or "standard"). Administrators are always authorized users, but not every authorized user is an administrator.
@@ -46,7 +47,7 @@ Return ONLY valid JSON in this exact format:
 
 Guidelines:
 - Extract ALL authorized users, and always include an "account_type" and any listed "groups" for each one.
-- Identify users described as new, recently hired, to be created, or part of a newly formed department as recent_hires.
+- Identify users described as new, recently hired, to be created, or part of a newly formed department as recent hires.
 - Identify users marked as terminated, removed, unauthorized, or former as terminated_users.
 - Service names should be actual service names (e.g., "ssh", "apache2", "mysql").
 - Account types: "admin" for administrators, "standard" for regular users.
@@ -54,7 +55,8 @@ Guidelines:
 - Extract group memberships for all users, including admins and standard users.
 - Capture system users to restrict ONLY when explicitly mentioned in the README.
 - If information is not present, use empty arrays [].
-- Return ONLY the JSON object, no additional text or explanation.'
+- Return ONLY the JSON object, no additional text or explanation.
+EOF
 
 # Check if API key is configured
 check_openrouter_config() {
