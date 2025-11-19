@@ -66,17 +66,22 @@ check_openrouter_config() {
     return 0
 }
 
-# Remove HTML tags from content (similar to PowerShell version)
+# Remove HTML tags from content (re-written with perl for multi-line support)
 remove_html_tags() {
     local content="$1"
 
-    # Remove head, script, and style tags with their content
-    content=$(echo "$content" | sed -E 's|<head[^>]*>.*</head>||gI')
-    content=$(echo "$content" | sed -E 's|<script[^>]*>.*</script>||gI')
-    content=$(echo "$content" | sed -E 's|<style[^>]*>.*</style>||gI')
+    # Use Perl for multi-line regex replacements
+    # -0777 slurps the whole file
+    # -p prints the result
+    # 's|...|...|gis' -> g=global, i=case-insensitive, s=dot matches newline
+
+    # Remove head, script, and style tags with their content (non-greedy)
+    content=$(echo "$content" | perl -0777 -p -e 's|<head[^>]*>.*?</head>||gis')
+    content=$(echo "$content" | perl -0777 -p -e 's|<script[^>]*>.*?</script>||gis')
+    content=$(echo "$content" | perl -0777 -p -e 's|<style[^>]*>.*?</style>||gis')
 
     # Remove all remaining HTML tags
-    content=$(echo "$content" | sed -E 's|<[^>]+>||g')
+    content=$(echo "$content" | perl -0777 -p -e 's|<[^>]+>||g')
 
     # Collapse multiple whitespace to single space
     content=$(echo "$content" | tr -s '[:space:]' ' ')
