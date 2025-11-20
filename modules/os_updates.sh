@@ -171,6 +171,178 @@ check_reboot_required() {
     return 0
 }
 
+# Configure APT periodic settings for Mint to allow automatic updates
+enable_automatic_apt_updates() {
+    log_section "Configuring Automatic APT Updates"
+
+    local auto_conf="/etc/apt/apt.conf.d/20auto-upgrades"
+    backup_file "$auto_conf" 2>/dev/null || true
+
+    cat >"$auto_conf" <<'EOF'
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Download-Upgradeable-Packages "1";
+APT::Periodic::Unattended-Upgrade "1";
+APT::Periodic::AutocleanInterval "7";
+APT::Periodic::Autoremove "1";
+APT::Periodic::AutoremoveInterval "7";
+EOF
+
+    log_success "Automatic APT update policies enabled"
+}
+
+# Ensure unattended-upgrades will clean up old kernels and dependencies
+configure_unattended_cleanup_policy() {
+    log_section "Configuring Unattended-Upgrades Cleanup"
+
+    local unattended_conf="/etc/apt/apt.conf.d/50unattended-upgrades"
+
+    if [[ -f "$unattended_conf" ]]; then
+        backup_file "$unattended_conf"
+    fi
+
+    touch "$unattended_conf"
+
+    if ! grep -q "Remove-Unused-Kernel-Packages" "$unattended_conf"; then
+        echo "Unattended-Upgrade::Remove-Unused-Kernel-Packages \"true\";" >>"$unattended_conf"
+    fi
+
+    if ! grep -q "Remove-Unused-Dependencies" "$unattended_conf"; then
+        echo "Unattended-Upgrade::Remove-Unused-Dependencies \"true\";" >>"$unattended_conf"
+    fi
+
+    log_success "Unattended-upgrades cleanup policies configured"
+}
+
+# Create a timer to run flatpak updates automatically
+enable_flatpak_auto_updates() {
+    log_section "Configuring Automatic Flatpak Updates"
+
+    if ! command_exists flatpak; then
+        log_warn "Flatpak not installed; skipping automatic Flatpak updates"
+        return 0
+    fi
+
+    if ! command_exists systemctl; then
+        log_warn "systemd not available; cannot configure Flatpak update timer"
+        return 0
+    fi
+
+    local service="/etc/systemd/system/cp-flatpak-update.service"
+    local timer="/etc/systemd/system/cp-flatpak-update.timer"
+
+    cat >"$service" <<'EOF'
+[Unit]
+Description=CyberPatriot - Automatic Flatpak Updates
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/flatpak update -y --noninteractive
+EOF
+
+    cat >"$timer" <<'EOF'
+[Unit]
+Description=Run automatic Flatpak updates daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+    systemctl daemon-reload >/dev/null 2>&1
+    systemctl enable cp-flatpak-update.timer >/dev/null 2>&1 && systemctl start cp-flatpak-update.timer >/dev/null 2>&1
+
+    log_success "Flatpak auto-update timer enabled"
+}
+
+# Refresh Mint update metadata shortly after login and regularly afterwards
+configure_mint_update_manager_refresh() {
+    log_section "Configuring Mint Update Manager Refresh"
+
+    if ! command_exists systemctl; then
+        log_warn "systemd not available; cannot configure refresh schedule"
+        return 0
+    fi
+
+    local service="/etc/systemd/system/cp-mintupdate-refresh.service"
+    local timer="/etc/systemd/system/cp-mintupdate-refresh.timer"
+
+    cat >"$service" <<'EOF'
+[Unit]
+Description=CyberPatriot - Refresh Mint updates and Flatpak catalog
+ConditionACPower=true
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c 'if command -v mintupdate-cli >/dev/null 2>&1; then mintupdate-cli refresh; fi; if command -v flatpak >/dev/null 2>&1; then flatpak update --app --runtime --assumeyes --noninteractive --no-related; fi'
+EOF
+
+    cat >"$timer" <<'EOF'
+[Unit]
+Description=Schedule Mint update refreshes (10 minutes after login, then every 2 hours)
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=2h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+    systemctl daemon-reload >/dev/null 2>&1
+    systemctl enable cp-mintupdate-refresh.timer >/dev/null 2>&1 && systemctl start cp-mintupdate-refresh.timer >/dev/null 2>&1
+
+    log_success "Mint Update Manager refresh schedule enabled"
+}
+
+# Clear package holds that would block updates
+clear_mint_blocklist() {
+    log_section "Clearing Blocked Packages"
+
+    local held_packages
+    held_packages=$(apt-mark showhold)
+
+    if [[ -z "$held_packages" ]]; then
+        log_info "No held packages found"
+        return 0
+    fi
+
+    while read -r pkg; do
+        if [[ -n "$pkg" ]]; then
+            log_info "Removing hold on $pkg"
+            apt-mark unhold "$pkg" >/dev/null 2>&1
+        fi
+    done <<<"$held_packages"
+
+    log_success "Blocked packages cleared"
+}
+
+# Enable Mint-specific update features
+configure_mint_specific_updates() {
+    local os_id=$(detect_os)
+
+    if [[ "$os_id" == "ubuntu" ]]; then
+        log_info "Ubuntu detected; skipping Mint-specific update configuration"
+        return 0
+    fi
+
+    if [[ "$os_id" != "linuxmint" ]]; then
+        log_warn "Mint-specific update tasks skipped (unsupported distribution: $os_id)"
+        return 0
+    fi
+
+    enable_automatic_apt_updates
+    configure_unattended_cleanup_policy
+    enable_flatpak_auto_updates
+    configure_mint_update_manager_refresh
+    clear_mint_blocklist
+
+    log_success "Mint-specific update settings applied"
+}
+
 # Display update summary
 display_update_summary() {
     log_section "Update Summary"
@@ -249,6 +421,9 @@ run_os_updates() {
 
     # Display summary
     display_update_summary
+
+    # Apply Mint Update Manager automation if applicable
+    configure_mint_specific_updates
 
     log_success "OS Updates module completed"
     return 0
