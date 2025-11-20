@@ -42,27 +42,30 @@ get_current_users() {
     awk -F: '$3 >= 1000 && $3 < 65534 && $1 != "nobody" { print $1 }' /etc/passwd
 }
 
-# --- MODIFIED FUNCTION ---
-# Re-written to be 100% POSIX compliant (no bash arrays)
+# Get current admins based on group membership
+# We use sudo/admin for *identification* of admins.
+# The adm group is cleaned up separately so it doesn't affect
+# who we consider to be an "admin" for logic/score purposes.
 get_current_admins() {
     local group users user
-    
-    # Use a subshell to group all echo output and pipe to sort -u
+
+    # Determine "current admins" based on sudo/admin group membership ONLY.
+    # adm is handled separately so that we can still clean it up without
+    # treating every adm member as a full administrator.
     (
-        for group in sudo admin adm; do
+        for group in sudo admin; do
             if getent group "$group" &>/dev/null; then
                 users=$(getent group "$group" | awk -F: '{print $4}')
-                
-                # Replace comma-separated list with newlines
-                # Then read each line (user) in a loop
+
+                # Replace comma-separated list with newlines and trim whitespace
                 echo "$users" | tr ',' '\n' | while IFS= read -r user; do
-                    user=$(echo "$user" | xargs) # Trim whitespace
+                    user=$(echo "$user" | xargs)
                     [[ -z "$user" ]] && continue
-                    echo "$user" # Echo each user
+                    echo "$user"
                 done
             fi
         done
-    ) | sort -u # Pipe all echoed users to sort -u
+    ) | sort -u
 }
 
 # Check if user is a system account
@@ -422,27 +425,25 @@ manage_admin_privileges() {
 
     local changes_made=0
     local current_admin auth_admin group
-    
-    # --- MODIFIED BLOCK ---
-    # Removed mapfile and bash array loop for portability
-    # We pipe the loops' output and capture the *final* count
-    # to work around subshell variable scope issues.
-    
-    local remove_changes add_changes
-    
-    # Remove unauthorized admins from privileged groups
-    remove_changes=$(get_current_admins | {
+    local remove_admin_changes cleanup_adm_changes add_changes
+
+    # ------------------------------------------------------------------
+    # 1. Remove unauthorized *admins* based on sudo/admin group membership
+    #    (primary indicator of administrative access).
+    # ------------------------------------------------------------------
+    remove_admin_changes=$(get_current_admins | {
         local count=0
         while IFS= read -r current_admin; do
             [[ -z "$current_admin" ]] && continue
 
             if ! is_user_admin "$current_admin"; then
-                log_warn "User $current_admin has administrative access but isn't authorized"
+                log_warn "User $current_admin has administrative access via sudo/admin but isn't authorized"
 
+                # Strip them from all admin-ish groups
                 for group in sudo admin adm; do
                     if getent group "$group" &>/dev/null && groups "$current_admin" | grep -qw "$group"; then
                         log_info "Removing $current_admin from $group group"
-                        if deluser "$current_admin" "$group" 2>/dev/null; then
+                        if deluser "$current_admin" "$group" >/dev/null 2>&1; then
                             log_success "Removed $current_admin from $group group"
                             count=$((count + 1))
                         else
@@ -452,10 +453,47 @@ manage_admin_privileges() {
                 done
             fi
         done
-        echo "$count" # Echo the count from within the subshell
+        echo "$count"
     })
 
-    # Add authorized admins to privileged groups
+    # ------------------------------------------------------------------
+    # 2. Separately clean up the adm group:
+    #    any non-admin lingering in adm should be removed, even if they
+    #    are not in sudo. This satisfies "remove unauthorized from adm".
+    # ------------------------------------------------------------------
+    cleanup_adm_changes=0
+    if getent group adm &>/dev/null; then
+        cleanup_adm_changes=$(
+            getent group adm | awk -F: '{print $4}' | tr ',' '\n' | {
+                local adm_user count=0
+
+                while IFS= read -r adm_user; do
+                    adm_user=$(echo "$adm_user" | xargs)
+                    [[ -z "$adm_user" ]] && continue
+
+                    # Authorized admins are allowed to stay in adm
+                    if is_user_admin "$adm_user"; then
+                        continue
+                    fi
+
+                    log_warn "User $adm_user is in adm group but isn't authorized"
+                    log_info "Removing $adm_user from adm group"
+                    if deluser "$adm_user" "adm" >/dev/null 2>&1; then
+                        log_success "Removed $adm_user from adm group"
+                        count=$((count + 1))
+                    else
+                        log_error "Failed to remove $adm_user from adm group"
+                    fi
+                done
+
+                echo "$count"
+            }
+        )
+    fi
+
+    # ------------------------------------------------------------------
+    # 3. Ensure authorized admins are present in sudo/adm
+    # ------------------------------------------------------------------
     add_changes=$(get_authorized_admins | sort -u | {
         local count=0
         while IFS= read -r auth_admin; do
@@ -484,11 +522,10 @@ manage_admin_privileges() {
                 fi
             done
         done
-        echo "$count" # Echo the count from within the subshell
+        echo "$count"
     })
-    # --- END MODIFIED BLOCK ---
 
-    changes_made=$((remove_changes + add_changes))
+    changes_made=$((remove_admin_changes + cleanup_adm_changes + add_changes))
 
     if [[ $changes_made -eq 0 ]]; then
         log_info "Admin privileges are correct"
@@ -577,7 +614,7 @@ create_missing_users() {
 
         [[ -z "$username" || "$username" == "null" ]] && continue
 
-        if user_exists "$username"; then
+        if user_exists("$username"); then
             log_debug "User already exists: $username"
             continue
         fi
@@ -754,9 +791,7 @@ fix_null_passwords() {
     return 0
 }
 
-# --- MODIFIED FUNCTION ---
 # Enforce password policies
-# Removed associative array for portability
 enforce_password_policies() {
     log_section "Enforcing Password Policies"
 
@@ -839,9 +874,7 @@ check_password_hashing() {
     return 0
 }
 
-# --- MODIFIED FUNCTION ---
 # build_system_users_to_restrict
-# Removed associative array for portability
 build_system_users_to_restrict() {
     # Use a subshell to group all output and pipe to sort -u
     (
@@ -856,7 +889,6 @@ build_system_users_to_restrict() {
         get_system_users_to_restrict 2>/dev/null || true
     ) | sort -u
 }
-
 
 # Disable password login for system users
 disable_system_user_logins() {
@@ -916,9 +948,8 @@ ensure_system_accounts_nologin() {
             log_debug "User $username already has nologin shell"
             continue
         fi
-        
-        # [cite_start]Per README[cite: 14], never let users log in as root.
-        # This is a good place to enforce it, although other functions also handle root.
+
+        # NOTE: This enforces nologin even for root; adjust if your rules differ.
         if [[ "$username" == "root" ]]; then
              log_warn "Root user does not have a nologin shell. Enforcing policy."
         fi
