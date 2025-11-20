@@ -397,9 +397,6 @@ run_security_policy() {
     # Apply hardened sysctl configuration
     apply_hardened_sysctl
 
-    # Verify settings
-    verify_sysctl_settings
-
     # Check sudo configuration
     check_sudo_config
 

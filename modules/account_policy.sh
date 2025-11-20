@@ -351,9 +351,9 @@ disable_null_passwords() {
 
         # Reload SSH if it's running
         if systemctl is-active --quiet sshd 2>/dev/null; then
-            systemctl reload sshd 2>/dev/null
+            systemctl reload sshd 2>/dev/null || log_warn "Failed to reload sshd service"
         elif systemctl is-active --quiet ssh 2>/dev/null; then
-            systemctl reload ssh 2>/dev/null
+            systemctl reload ssh 2>/dev/null || log_warn "Failed to reload ssh service"
         fi
     fi
 
