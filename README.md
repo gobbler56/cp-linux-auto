@@ -4,12 +4,14 @@ A comprehensive, modular security remediation engine for CyberPatriot Linux comp
 
 ## Features
 
-- **Modular Architecture**: 13+ independent security modules that can be enabled/disabled
+- **Modular Architecture**: 22 independent security modules that can be enabled/disabled
 - **AI-Powered README Parsing**: Uses OpenRouter AI to extract structured information from README files
 - **Automated Security Checks**: Comprehensive vulnerability scanning and remediation
+- **Service Hardening**: Comprehensive hardening for SSH, FTP, Apache, NGINX, PostgreSQL, MySQL, Samba, and PHP
 - **Score Tracking**: Logs all remediation actions for scoring verification
 - **Backup System**: Automatically backs up files before modification
 - **Flexible Configuration**: Easy-to-edit configuration file for customization
+- **Intelligent Module Ordering**: Modules execute in optimized order to prevent conflicts
 
 ## Project Structure
 
@@ -20,20 +22,29 @@ cp-linux-auto/
 ├── lib/                      # Core libraries
 │   ├── utils.sh             # Utility functions
 │   └── openrouter.sh        # OpenRouter API interface
-├── modules/                  # Security modules
-│   ├── readme_parser.sh     # README parsing (non-modular, runs first)
+├── modules/                  # Security modules (22 total)
+│   ├── dependencies.sh      # Install required dependencies
+│   ├── readme_parser.sh     # README parsing with AI
 │   ├── forensics_questions.sh
-│   ├── user_auditing.sh
-│   ├── account_policy.sh
-│   ├── prohibited_files.sh
-│   ├── malware.sh
-│   ├── unwanted_software.sh
-│   ├── ssh_hardening.sh
-│   ├── os_updates.sh
-│   ├── service_auditing.sh
-│   ├── local_policy.sh
-│   ├── defensive_countermeasures.sh
-│   └── os_settings.sh
+│   ├── os_updates.sh        # System updates
+│   ├── user_auditing.sh     # User management
+│   ├── account_policy.sh    # Password policies
+│   ├── local_policy.sh      # Local security policies
+│   ├── security_policy.sh   # Kernel hardening (sysctl)
+│   ├── ssh_hardening.sh     # SSH server hardening
+│   ├── ftp_hardening.sh     # FTP server hardening
+│   ├── postgres_hardening.sh # PostgreSQL hardening
+│   ├── samba_hardening.sh   # Samba/SMB hardening
+│   ├── mysql_hardening.sh   # MySQL/MariaDB hardening
+│   ├── php_hardening.sh     # PHP hardening
+│   ├── nginx_hardening.sh   # NGINX hardening
+│   ├── apache_hardening.sh  # Apache hardening
+│   ├── service_auditing.sh  # Service management
+│   ├── unwanted_software.sh # Remove unwanted packages
+│   ├── malware.sh          # Malware detection
+│   ├── prohibited_files.sh # Media file detection
+│   ├── defensive_countermeasures.sh # Firewall/IDS
+│   └── os_settings.sh      # OS configuration
 └── data/                     # Runtime data and logs
     ├── readme_parsed.json   # Parsed README data
     └── readme_plaintext.txt # README plain text
@@ -87,53 +98,91 @@ sudo ./cp-engine.sh -c
 ./cp-engine.sh -h
 ```
 
+## Module Load Order
+
+The engine executes modules in a specific order to prevent conflicts and ensure dependencies are met. The default execution order is:
+
+1. **dependencies** - Installs required system packages
+2. **readme_parser** - Parses README with AI (provides data to other modules)
+3. **forensics_questions** - Answers forensics questions
+4. **os_updates** - Updates system packages
+5. **user_auditing** - Manages user accounts
+6. **account_policy** - Configures password policies
+7. **local_policy** - Sets local security policies
+8. **security_policy** - Kernel hardening via sysctl
+9. **ssh_hardening** - Hardens SSH configuration
+10. **ftp_hardening** - Hardens FTP configuration
+11. **postgres_hardening** - Hardens PostgreSQL
+12. **samba_hardening** - Hardens Samba/SMB
+13. **mysql_hardening** - Hardens MySQL/MariaDB
+14. **php_hardening** - Hardens PHP configuration
+15. **nginx_hardening** - Hardens NGINX
+16. **apache_hardening** - Hardens Apache
+17. **service_auditing** - Manages system services
+18. **unwanted_software** - Removes unwanted packages
+19. **malware** - Scans for malware
+20. **prohibited_files** - Scans for prohibited media files
+21. **defensive_countermeasures** - Configures firewall and IDS
+22. **os_settings** - Final OS configuration tweaks
+
+This order is defined in `cp-engine.sh` (lines 23-46) and ensures that foundation modules like dependencies and README parsing run first, followed by user management, service hardening, and finally detection/cleanup modules.
+
 ## Modules
 
-### 1. **README Parser** (Core Module)
+### 1. **Dependencies** (Foundation)
+- Automatically installs required system packages
+- Ensures curl, jq, and other essential tools are available
+- Repairs APT sources if needed
+- Updates package lists
+
+### 2. **README Parser** (Core Module)
 - Automatically finds README.html files
 - Strips HTML content and extracts plain text
 - Uses OpenRouter AI to parse structured information
 - Provides data to all other modules
 
-### 2. **Forensics Questions**
+### 3. **Forensics Questions**
 - Identifies forensics questions in README
 - Helps answer common forensics questions
 - Saves answers for manual submission
 
-### 3. **User Auditing**
+### 4. **OS Updates**
+- Checks kernel version and updates
+- Installs OS security patches
+- Configures automatic security updates
+- Detects required system reboots
+- Runs full system upgrade (apt-get full-upgrade)
+- Handles all package updates and dependencies
+
+### 5. **User Auditing**
 - Compares system users against README authorized list
 - Identifies unauthorized users
 - Detects terminated users with active accounts
 - Creates missing authorized users
 - Verifies admin privileges
 
-### 4. **Account Policy**
+### 6. **Account Policy**
 - Configures password complexity requirements
 - Sets password aging policies
 - Configures account lockout
 - Enforces minimum password length
 - Sets up password history
 
-### 5. **Prohibited Files**
-- Scans for prohibited media files (.mp3, .mp4, etc.)
-- Identifies hacking tools and unauthorized software
-- Generates reports of found files
-- Optional automatic removal
+### 7. **Local Policy**
+- Configures sudo permissions
+- Sets secure file permissions
+- Configures audit logging (auditd)
+- Sets secure umask values
 
-### 6. **Malware**
-- Runs ClamAV virus scans
-- Executes rkhunter for rootkit detection
-- Checks for suspicious processes
-- Scans for backdoors and reverse shells
-- Examines cron jobs and startup scripts
+### 8. **Security Policy**
+- Implements kernel hardening via sysctl parameters
+- Disables IP forwarding and source routing
+- Enables SYN cookies and reverse path filtering
+- Configures ICMP and network security settings
+- Disables X Server TCP connections for security
+- Hardens kernel security parameters
 
-### 7. **Unwanted Software**
-- Lists all installed packages
-- Identifies hacking tools (nmap, john, hydra, etc.)
-- Detects P2P software and games
-- Recommends packages for removal
-
-### 8. **SSH Hardening**
+### 9. **SSH Hardening**
 - Comprehensive SSH server hardening (PermitRootLogin, PasswordAuthentication, etc.)
 - Configures strong cryptographic algorithms (ciphers, MACs, key exchange)
 - Hardens SSH file and directory permissions
@@ -144,7 +193,7 @@ sudo ./cp-engine.sh -c
 - Validates configuration before applying changes
 - Supports Ubuntu 24.04 and Linux Mint 21
 
-### 9. **FTP Hardening**
+### 10. **FTP Hardening**
 - Hardens vsftpd and ProFTPD configurations
 - Disables anonymous FTP access
 - Enforces TLS/SSL encryption
@@ -152,7 +201,61 @@ sudo ./cp-engine.sh -c
 - Sets proper file permissions on configuration files
 - Implements chroot jails for local users
 
-### 10. **Apache Hardening**
+### 11. **PostgreSQL Hardening**
+- Hardens PostgreSQL server configuration
+- Configures authentication methods (pg_hba.conf)
+- Enforces SSL/TLS for remote connections
+- Sets secure listen addresses and port configuration
+- Implements password encryption (scram-sha-256)
+- Hardens file system permissions on data directories
+- Configures connection limits and timeouts
+- Disables dangerous extensions and functions
+- Validates configuration before restart
+
+### 12. **Samba Hardening**
+- Comprehensive Samba/SMB file sharing hardening
+- Disables SMBv1 protocol (security vulnerability)
+- Enforces encrypted connections
+- Configures proper authentication methods
+- Sets strict file permissions on shares
+- Implements access control lists
+- Disables guest access and null sessions
+- Configures allowed networks and hosts
+
+### 13. **MySQL/MariaDB Hardening**
+- Hardens MySQL/MariaDB configuration
+- Removes anonymous users and test databases
+- Disables remote root login
+- Enforces strong password policies
+- Configures SSL/TLS for connections
+- Disables dangerous features (local_infile, symbolic links)
+- Sets proper bind-address (localhost)
+- Hardens file system permissions on config and data directories
+- Implements connection limits and timeouts
+
+### 14. **PHP Hardening**
+- Hardens PHP configuration for both PHP-FPM and mod_php
+- Disables dangerous functions (exec, shell_exec, system, etc.)
+- Configures open_basedir restrictions
+- Disables file uploads or restricts upload directory
+- Sets proper file permissions on PHP config files
+- Configures secure session handling
+- Disables expose_php and display_errors
+- Implements memory and execution limits
+- Removes dangerous PHP files and shells
+
+### 15. **NGINX Hardening**
+- Comprehensive NGINX web server hardening
+- Hides server version and tokens
+- Configures secure SSL/TLS settings
+- Implements security headers (X-Frame-Options, CSP, etc.)
+- Disables unnecessary modules
+- Sets proper timeouts to prevent DoS
+- Configures request size limits
+- Hardens file permissions on config and web root
+- Protects sensitive files and directories
+
+### 16. **Apache Hardening**
 - Comprehensive Apache2 web server hardening
 - Hides server version and OS information (ServerTokens, ServerSignature)
 - Disables HTTP TRACE method to prevent XST attacks
@@ -169,33 +272,38 @@ sudo ./cp-engine.sh -c
 - Validates configuration before applying changes
 - Supports both Ubuntu 24.04 and Linux Mint 21
 
-### 11. **OS Updates**
-- Checks kernel version and updates
-- Installs OS security patches
-- Configures automatic security updates
-- Detects required system reboots
-- Runs full system upgrade (apt-get full-upgrade)
-- Handles all package updates and dependencies
-
-### 12. **Service Auditing**
+### 17. **Service Auditing**
 - Lists all running services
 - Ensures critical services are running
 - Identifies unnecessary/dangerous services
 - Manages service startup configuration
 
-### 13. **Local Policy**
-- Configures sudo permissions
-- Sets secure file permissions
-- Configures audit logging (auditd)
-- Sets secure umask values
+### 18. **Unwanted Software**
+- Lists all installed packages
+- Identifies hacking tools (nmap, john, hydra, etc.)
+- Detects P2P software and games
+- Recommends packages for removal
 
-### 14. **Defensive Countermeasures**
+### 19. **Malware**
+- Runs ClamAV virus scans
+- Executes rkhunter for rootkit detection
+- Checks for suspicious processes
+- Scans for backdoors and reverse shells
+- Examines cron jobs and startup scripts
+
+### 20. **Prohibited Files**
+- Scans for prohibited media files (.mp3, .mp4, etc.)
+- Identifies hacking tools and unauthorized software
+- Generates reports of found files
+- Optional automatic removal
+
+### 21. **Defensive Countermeasures**
 - Enables and configures UFW firewall
 - Sets up fail2ban for intrusion prevention
 - Enables auditd for system auditing
 - Configures file integrity monitoring (AIDE)
 
-### 15. **OS Settings**
+### 22. **OS Settings**
 - Configures kernel security parameters (sysctl)
 - Disables unnecessary kernel modules
 - Sets up system banners
@@ -337,40 +445,48 @@ MODULES=(
 
 ## Development Status
 
-### ✅ Complete
-- Core engine architecture
-- Module loading system
-- OpenRouter API integration
-- README HTML parsing
-- Configuration system
-- Logging and utilities
-- All module scaffolds
-
-### 🚧 To Be Implemented
-- Full implementation of each module's functionality
-- Specific remediation actions
-- Automated fixing capabilities
-- Testing and validation
+### ✅ Fully Implemented
+- Core engine architecture with intelligent module ordering
+- Module loading system with automatic discovery
+- OpenRouter API integration for README parsing
+- Configuration system with flexible settings
+- Comprehensive logging and utilities
+- **All 22 security modules with full functionality:**
+  - User management and auditing
+  - Password and account policies
+  - Service hardening (SSH, FTP, Apache, NGINX, PostgreSQL, MySQL, Samba, PHP)
+  - Malware and rootkit detection
+  - Prohibited file scanning
+  - Forensics question assistance
+  - System updates and patch management
+  - Firewall and intrusion detection setup
+  - Kernel hardening and security policies
 
 ## Dependencies
 
-### Required
+### Required (Auto-installed by dependencies module)
 - `bash` (4.0+)
 - `curl` - For API calls
 - `jq` - For JSON parsing
 - `sed`, `awk`, `grep` - Text processing
+- `mlocate` - For file searching (updatedb/locate)
 
-### Optional (for specific modules)
-- `clamav` - Virus scanning
-- `rkhunter` - Rootkit detection
-- `fail2ban` - Intrusion prevention
-- `ufw` - Firewall management
-- `auditd` - System auditing
-- `aide` - File integrity monitoring
+### Optional (Installed as needed by modules)
+- `clamav` - Virus scanning (malware module)
+- `rkhunter` - Rootkit detection (malware module)
+- `lynis` - Security auditing (malware module)
+- `fail2ban` - Intrusion prevention (defensive countermeasures)
+- `ufw` - Firewall management (defensive countermeasures)
+- `auditd` - System auditing (local policy)
+- `aide` - File integrity monitoring (defensive countermeasures)
+- `libpam-pwquality` - Password quality enforcement (account policy)
+- `libpam-cracklib` - Password strength checking (account policy)
 
-Install optional dependencies:
+The **dependencies** module automatically installs required packages. Service-specific packages (Apache, NGINX, PostgreSQL, MySQL, Samba, PHP) are only configured if already installed on the system.
+
+Install all optional dependencies:
 ```bash
-sudo apt-get install clamav rkhunter fail2ban ufw auditd aide
+sudo apt-get install clamav rkhunter lynis fail2ban ufw auditd aide libpam-pwquality libpam-cracklib
 ```
 
 ## Scoring
