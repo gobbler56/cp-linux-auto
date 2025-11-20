@@ -197,7 +197,11 @@ EOF
     log_info "Applying sysctl configuration..."
 
     # Apply settings, ignore errors for parameters that don't exist on this kernel
-    if sysctl -p "$SYSCTL_CONF" 2>&1 | tee /tmp/sysctl_apply.log | grep -v "No such file or directory" | grep -v "cannot stat" >/dev/null; then
+    # Capture output so we don't trip on non-fatal missing-parameter errors
+    local sysctl_output
+    sysctl_output="$(sysctl -p "$SYSCTL_CONF" 2>&1 | tee /tmp/sysctl_apply.log)" || true
+
+    if echo "$sysctl_output" | grep -qE "No such file or directory|cannot stat"; then
         log_info "Some sysctl parameters were not available on this system (this is normal)"
     fi
 
@@ -236,7 +240,8 @@ verify_sysctl_settings() {
 
     for param in "${!critical_checks[@]}"; do
         local expected="${critical_checks[$param]}"
-        local actual=$(sysctl -n "$param" 2>/dev/null)
+        local actual
+        actual=$(sysctl -n "$param" 2>/dev/null)
 
         if [[ "$actual" == "$expected" ]]; then
             log_success "✓ $param = $actual"
@@ -265,12 +270,17 @@ check_sudo_config() {
     # Check sudoers file for NOPASSWD entries
     local nopasswd_count=0
     if [[ -f /etc/sudoers ]]; then
-        nopasswd_count=$(grep -c "NOPASSWD:" /etc/sudoers 2>/dev/null || echo 0)
+        # grep may fail with non-zero if no matches; that's fine
+        local count
+        count=$(grep -c "NOPASSWD:" /etc/sudoers 2>/dev/null || echo 0)
+        nopasswd_count=$((nopasswd_count + count))
     fi
 
     # Check sudoers.d directory
     if [[ -d /etc/sudoers.d ]]; then
-        nopasswd_count=$((nopasswd_count + $(grep -r "NOPASSWD:" /etc/sudoers.d 2>/dev/null | wc -l)))
+        local dir_count
+        dir_count=$(grep -r "NOPASSWD:" /etc/sudoers.d 2>/dev/null | wc -l || echo 0)
+        nopasswd_count=$((nopasswd_count + dir_count))
     fi
 
     if [[ $nopasswd_count -eq 0 ]]; then
@@ -305,7 +315,8 @@ check_group_sudo_privileges() {
 
     # Check if sudo group has members (this is expected)
     if getent group sudo >/dev/null 2>&1; then
-        local sudo_members=$(getent group sudo | cut -d: -f4)
+        local sudo_members
+        sudo_members=$(getent group sudo | cut -d: -f4)
         if [[ -n "$sudo_members" ]]; then
             log_info "Sudo group members: $sudo_members"
             log_info "This is expected - individual users should be in sudo group, not other groups"
@@ -317,9 +328,10 @@ check_group_sudo_privileges() {
         # Look for lines like "%groupname ALL=(ALL:ALL) ALL"
         while IFS= read -r line; do
             if [[ -n "$line" ]]; then
-                local groupname=$(echo "$line" | sed 's/^%\([^ ]*\).*/\1/')
+                local groupname
+                groupname=$(echo "$line" | sed 's/^%\([^ ]*\).*/\1/')
                 # Skip the sudo and admin groups as they are standard
-                if [[ "$groupname" != "sudo" ]] && [[ "$groupname" != "admin" ]]; then
+                if [[ "$groupname" != "sudo" && "$groupname" != "admin" ]]; then
                     log_warn "Group $groupname has sudo privileges in /etc/sudoers"
                     log_info "Commenting out sudo privileges for group: $groupname"
                     sed -i "s/^\(%$groupname.*\)$/# DISABLED BY SECURITY POLICY: \1/" /etc/sudoers
@@ -334,8 +346,9 @@ check_group_sudo_privileges() {
         while IFS= read -r file; do
             while IFS= read -r line; do
                 if [[ -n "$line" ]]; then
-                    local groupname=$(echo "$line" | sed 's/^%\([^ ]*\).*/\1/')
-                    if [[ "$groupname" != "sudo" ]] && [[ "$groupname" != "admin" ]]; then
+                    local groupname
+                    groupname=$(echo "$line" | sed 's/^%\([^ ]*\).*/\1/')
+                    if [[ "$groupname" != "sudo" && "$groupname" != "admin" ]]; then
                         log_warn "Group $groupname has sudo privileges in $file"
                         log_info "Commenting out sudo privileges for group: $groupname in $file"
                         sed -i "s/^\(%$groupname.*\)$/# DISABLED BY SECURITY POLICY: \1/" "$file"
@@ -396,6 +409,9 @@ run_security_policy() {
 
     # Apply hardened sysctl configuration
     apply_hardened_sysctl
+
+    # (Optional) Verify key sysctl settings
+    verify_sysctl_settings
 
     # Check sudo configuration
     check_sudo_config
