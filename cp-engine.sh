@@ -31,6 +31,7 @@ DESIRED_MODULE_ORDER=(
     security_policy
     ssh_hardening
     ftp_hardening
+    postgres_hardening
     samba_hardening
     mysql_hardening
     php_hardening
