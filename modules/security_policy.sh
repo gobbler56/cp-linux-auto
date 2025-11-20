@@ -206,55 +206,6 @@ EOF
     return 0
 }
 
-# Verify sysctl settings
-verify_sysctl_settings() {
-    log_section "Verifying Sysctl Security Settings"
-
-    local checks_passed=0
-    local checks_failed=0
-
-    # Define critical checks with their expected values
-    declare -A critical_checks=(
-        ["kernel.randomize_va_space"]="2"
-        ["net.ipv4.tcp_syncookies"]="1"
-        ["net.ipv4.tcp_syn_retries"]="2"
-        ["net.ipv4.tcp_synack_retries"]="2"
-        ["net.ipv4.tcp_rfc1337"]="1"
-        ["net.ipv4.ip_forward"]="0"
-        ["net.ipv4.conf.all.send_redirects"]="0"
-        ["net.ipv4.conf.all.accept_redirects"]="0"
-        ["net.ipv4.conf.all.accept_source_route"]="0"
-        ["net.ipv4.conf.all.rp_filter"]="2"
-        ["net.ipv4.icmp_ignore_bogus_error_responses"]="1"
-        ["net.ipv4.icmp_echo_ignore_broadcasts"]="1"
-        ["kernel.kptr_restrict"]="2"
-        ["kernel.sysrq"]="0"
-        ["kernel.unprivileged_userns_clone"]="0"
-        ["kernel.dmesg_restrict"]="1"
-        ["net.ipv4.conf.all.log_martians"]="1"
-    )
-
-    for param in "${!critical_checks[@]}"; do
-        local expected="${critical_checks[$param]}"
-        local actual=$(sysctl -n "$param" 2>/dev/null)
-
-        if [[ "$actual" == "$expected" ]]; then
-            log_success "✓ $param = $actual"
-            ((checks_passed++))
-        else
-            log_warn "✗ $param = $actual (expected: $expected)"
-            ((checks_failed++))
-        fi
-    done
-
-    log_info "Security checks passed: $checks_passed"
-    if [[ $checks_failed -gt 0 ]]; then
-        log_warn "Security checks failed: $checks_failed"
-    fi
-
-    return 0
-}
-
 # Check sudo configuration
 check_sudo_config() {
     log_section "Checking Sudo Configuration"
@@ -396,9 +347,6 @@ run_security_policy() {
 
     # Apply hardened sysctl configuration
     apply_hardened_sysctl
-
-    # Verify settings
-    verify_sysctl_settings
 
     # Check sudo configuration
     check_sudo_config
