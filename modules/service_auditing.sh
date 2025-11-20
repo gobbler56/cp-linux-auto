@@ -250,7 +250,7 @@ handle_always_start_services() {
 
     for service in "${ALWAYS_START_SERVICES[@]}"; do
         if start_enable_service "$service"; then
-            ((changes_made++))
+            ((changes_made++)) || true
         fi
     done
 
@@ -269,7 +269,7 @@ handle_always_stop_services() {
 
     for service in "${ALWAYS_STOP_SERVICES[@]}"; do
         if stop_disable_service "$service" "Always disabled for security"; then
-            ((changes_made++))
+            ((changes_made++)) || true
         fi
     done
 
@@ -407,7 +407,7 @@ apply_service_recommendations() {
         log_debug "Reason: $reason"
 
         if stop_disable_service "$service" "$reason"; then
-            ((stopped_count++))
+            ((stopped_count++)) || true
         fi
     done
 
