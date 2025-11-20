@@ -240,10 +240,10 @@ verify_sysctl_settings() {
 
         if [[ "$actual" == "$expected" ]]; then
             log_success "✓ $param = $actual"
-            ((checks_passed++))
+            checks_passed=$((checks_passed + 1))
         else
             log_warn "✗ $param = $actual (expected: $expected)"
-            ((checks_failed++))
+            checks_failed=$((checks_failed + 1))
         fi
     done
 
@@ -323,7 +323,7 @@ check_group_sudo_privileges() {
                     log_warn "Group $groupname has sudo privileges in /etc/sudoers"
                     log_info "Commenting out sudo privileges for group: $groupname"
                     sed -i "s/^\(%$groupname.*\)$/# DISABLED BY SECURITY POLICY: \1/" /etc/sudoers
-                    ((issues_found++))
+                    issues_found=$((issues_found + 1))
                 fi
             fi
         done < <(grep -E "^%[^#]" /etc/sudoers 2>/dev/null | grep -v "^%sudo" | grep -v "^%admin")
@@ -339,7 +339,7 @@ check_group_sudo_privileges() {
                         log_warn "Group $groupname has sudo privileges in $file"
                         log_info "Commenting out sudo privileges for group: $groupname in $file"
                         sed -i "s/^\(%$groupname.*\)$/# DISABLED BY SECURITY POLICY: \1/" "$file"
-                        ((issues_found++))
+                        issues_found=$((issues_found + 1))
                     fi
                 fi
             done < <(grep -E "^%[^#]" "$file" 2>/dev/null | grep -v "^%sudo" | grep -v "^%admin")

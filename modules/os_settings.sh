@@ -40,7 +40,7 @@ fix_grub_permissions() {
 
             if [[ $? -eq 0 ]]; then
                 log_success "✓ Secured $grub_file (600, root:root)"
-                ((fixed_count++))
+                fixed_count=$((fixed_count + 1))
             else
                 log_warn "Failed to secure $grub_file"
             fi
@@ -97,31 +97,31 @@ fix_system_file_permissions() {
 
     # /etc/passwd - world readable, root owned
     if [[ -f /etc/passwd ]]; then
-        ((total_checks++))
+        total_checks=$((total_checks + 1))
         log_info "Checking /etc/passwd..."
         chown root:root /etc/passwd 2>/dev/null
         chmod 644 /etc/passwd 2>/dev/null
         if [[ $? -eq 0 ]]; then
             log_success "✓ /etc/passwd (644, root:root)"
-            ((fixed_count++))
+            fixed_count=$((fixed_count + 1))
         fi
     fi
 
     # /etc/group - world readable, root owned
     if [[ -f /etc/group ]]; then
-        ((total_checks++))
+        total_checks=$((total_checks + 1))
         log_info "Checking /etc/group..."
         chown root:root /etc/group 2>/dev/null
         chmod 644 /etc/group 2>/dev/null
         if [[ $? -eq 0 ]]; then
             log_success "✓ /etc/group (644, root:root)"
-            ((fixed_count++))
+            fixed_count=$((fixed_count + 1))
         fi
     fi
 
     # /etc/shadow - shadow group readable only
     if [[ -f /etc/shadow ]]; then
-        ((total_checks++))
+        total_checks=$((total_checks + 1))
         log_info "Checking /etc/shadow..."
 
         # Ensure shadow group exists
@@ -133,13 +133,13 @@ fix_system_file_permissions() {
         chmod 640 /etc/shadow 2>/dev/null
         if [[ $? -eq 0 ]]; then
             log_success "✓ /etc/shadow (640, root:shadow)"
-            ((fixed_count++))
+            fixed_count=$((fixed_count + 1))
         fi
     fi
 
     # /etc/gshadow - shadow group readable only
     if [[ -f /etc/gshadow ]]; then
-        ((total_checks++))
+        total_checks=$((total_checks + 1))
         log_info "Checking /etc/gshadow..."
 
         # Ensure shadow group exists
@@ -151,19 +151,19 @@ fix_system_file_permissions() {
         chmod 640 /etc/gshadow 2>/dev/null
         if [[ $? -eq 0 ]]; then
             log_success "✓ /etc/gshadow (640, root:shadow)"
-            ((fixed_count++))
+            fixed_count=$((fixed_count + 1))
         fi
     fi
 
     # /etc/sudoers - root read only
     if [[ -f /etc/sudoers ]]; then
-        ((total_checks++))
+        total_checks=$((total_checks + 1))
         log_info "Checking /etc/sudoers..."
         chown root:root /etc/sudoers 2>/dev/null
         chmod 440 /etc/sudoers 2>/dev/null
         if [[ $? -eq 0 ]]; then
             log_success "✓ /etc/sudoers (440, root:root)"
-            ((fixed_count++))
+            fixed_count=$((fixed_count + 1))
         fi
     fi
 
@@ -172,12 +172,12 @@ fix_system_file_permissions() {
         log_info "Checking /etc/sudoers.d/ files..."
         local sudoers_d_count=0
         while IFS= read -r -d '' file; do
-            ((total_checks++))
+            total_checks=$((total_checks + 1))
             chown root:root "$file" 2>/dev/null
             chmod 440 "$file" 2>/dev/null
             if [[ $? -eq 0 ]]; then
-                ((fixed_count++))
-                ((sudoers_d_count++))
+                fixed_count=$((fixed_count + 1))
+                sudoers_d_count=$((sudoers_d_count + 1))
             fi
         done < <(find /etc/sudoers.d -type f -print0 2>/dev/null)
 
@@ -188,13 +188,13 @@ fix_system_file_permissions() {
 
     # /etc/crontab - root read/write only
     if [[ -f /etc/crontab ]]; then
-        ((total_checks++))
+        total_checks=$((total_checks + 1))
         log_info "Checking /etc/crontab..."
         chown root:root /etc/crontab 2>/dev/null
         chmod 600 /etc/crontab 2>/dev/null
         if [[ $? -eq 0 ]]; then
             log_success "✓ /etc/crontab (600, root:root)"
-            ((fixed_count++))
+            fixed_count=$((fixed_count + 1))
         fi
     fi
 
@@ -203,12 +203,12 @@ fix_system_file_permissions() {
         log_info "Checking /etc/cron.d/ files..."
         local cron_d_count=0
         while IFS= read -r -d '' file; do
-            ((total_checks++))
+            total_checks=$((total_checks + 1))
             chown root:root "$file" 2>/dev/null
             chmod 600 "$file" 2>/dev/null
             if [[ $? -eq 0 ]]; then
-                ((fixed_count++))
-                ((cron_d_count++))
+                fixed_count=$((fixed_count + 1))
+                cron_d_count=$((cron_d_count + 1))
             fi
         done < <(find /etc/cron.d -type f -print0 2>/dev/null)
 
@@ -223,12 +223,12 @@ fix_system_file_permissions() {
             log_info "Checking $cron_dir/ scripts..."
             local cron_script_count=0
             while IFS= read -r -d '' file; do
-                ((total_checks++))
+                total_checks=$((total_checks + 1))
                 chown root:root "$file" 2>/dev/null
                 chmod 700 "$file" 2>/dev/null
                 if [[ $? -eq 0 ]]; then
-                    ((fixed_count++))
-                    ((cron_script_count++))
+                    fixed_count=$((fixed_count + 1))
+                    cron_script_count=$((cron_script_count + 1))
                 fi
             done < <(find "$cron_dir" -type f -print0 2>/dev/null)
 
@@ -241,13 +241,13 @@ fix_system_file_permissions() {
     # /etc/at.allow and /etc/at.deny
     for at_file in /etc/at.allow /etc/at.deny; do
         if [[ -f "$at_file" ]]; then
-            ((total_checks++))
+            total_checks=$((total_checks + 1))
             log_info "Checking $at_file..."
             chown root:root "$at_file" 2>/dev/null
             chmod 600 "$at_file" 2>/dev/null
             if [[ $? -eq 0 ]]; then
                 log_success "✓ $at_file (600, root:root)"
-                ((fixed_count++))
+                fixed_count=$((fixed_count + 1))
             fi
         fi
     done
@@ -255,20 +255,20 @@ fix_system_file_permissions() {
     # /etc/cron.allow and /etc/cron.deny
     for cron_file in /etc/cron.allow /etc/cron.deny; do
         if [[ -f "$cron_file" ]]; then
-            ((total_checks++))
+            total_checks=$((total_checks + 1))
             log_info "Checking $cron_file..."
             chown root:root "$cron_file" 2>/dev/null
             chmod 600 "$cron_file" 2>/dev/null
             if [[ $? -eq 0 ]]; then
                 log_success "✓ $cron_file (600, root:root)"
-                ((fixed_count++))
+                fixed_count=$((fixed_count + 1))
             fi
         fi
     done
 
     # /var/log directory - syslog group can read
     if [[ -d /var/log ]]; then
-        ((total_checks++))
+        total_checks=$((total_checks + 1))
         log_info "Checking /var/log directory..."
 
         # Ensure syslog group exists
@@ -280,7 +280,7 @@ fix_system_file_permissions() {
         chmod 750 /var/log 2>/dev/null
         if [[ $? -eq 0 ]]; then
             log_success "✓ /var/log directory (750, root:syslog)"
-            ((fixed_count++))
+            fixed_count=$((fixed_count + 1))
         fi
     fi
 
@@ -294,7 +294,7 @@ fix_system_file_permissions() {
 
     for log_file in "${log_files[@]}"; do
         if [[ -f "$log_file" ]]; then
-            ((total_checks++))
+            total_checks=$((total_checks + 1))
             log_info "Checking $log_file..."
 
             # Ensure syslog group exists
@@ -306,20 +306,20 @@ fix_system_file_permissions() {
             chmod 640 "$log_file" 2>/dev/null
             if [[ $? -eq 0 ]]; then
                 log_success "✓ $log_file (640, root:adm/syslog)"
-                ((fixed_count++))
+                fixed_count=$((fixed_count + 1))
             fi
         fi
     done
 
     # /etc/security directory
     if [[ -d /etc/security ]]; then
-        ((total_checks++))
+        total_checks=$((total_checks + 1))
         log_info "Checking /etc/security directory..."
         chown root:root /etc/security 2>/dev/null
         chmod 755 /etc/security 2>/dev/null
         if [[ $? -eq 0 ]]; then
             log_success "✓ /etc/security directory (755, root:root)"
-            ((fixed_count++))
+            fixed_count=$((fixed_count + 1))
         fi
     fi
 
@@ -547,7 +547,7 @@ EOF
 
     if [[ $? -eq 0 ]]; then
         log_success "✓ Created /etc/X11/xorg.conf.d/10-nolisten.conf"
-        ((configs_created++))
+        configs_created=$((configs_created + 1))
     fi
 
     # Configure GDM3 (Ubuntu 24.04 default)
@@ -565,7 +565,7 @@ EOF
         fi
 
         log_success "✓ Configured GDM3 to disable TCP"
-        ((configs_created++))
+        configs_created=$((configs_created + 1))
     fi
 
     # Configure LightDM (Linux Mint 21 default)
@@ -583,7 +583,7 @@ EOF
 
         if [[ $? -eq 0 ]]; then
             log_success "✓ Configured LightDM to disable TCP"
-            ((configs_created++))
+            configs_created=$((configs_created + 1))
         fi
     fi
 

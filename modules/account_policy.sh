@@ -335,7 +335,7 @@ disable_null_passwords() {
             backup_file "$pam_file"
             sed -i 's/\s*nullok_secure//g; s/\s*nullok//g' "$pam_file"
             log_success "Removed nullok from $pam_file"
-            ((modified++))
+            modified=$((modified + 1))
         fi
     done
 
@@ -610,17 +610,17 @@ verify_pam_integrity() {
     # Check that critical PAM files have required modules
     if ! grep -q "pam_unix.so" /etc/pam.d/common-auth; then
         log_error "pam_unix.so missing from common-auth - authentication may fail!"
-        ((errors++))
+        errors=$((errors + 1))
     fi
 
     if ! grep -q "pam_permit.so\|pam_unix.so" /etc/pam.d/common-account; then
         log_error "Required module missing from common-account"
-        ((errors++))
+        errors=$((errors + 1))
     fi
 
     if ! grep -q "pam_unix.so" /etc/pam.d/common-password; then
         log_error "pam_unix.so missing from common-password - password changes may fail!"
-        ((errors++))
+        errors=$((errors + 1))
     fi
 
     if [[ $errors -gt 0 ]]; then

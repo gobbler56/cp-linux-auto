@@ -200,12 +200,12 @@ remove_unauthorized_users() {
 
         if userdel -r "$current_user" 2>/dev/null; then
             log_success "Removed unauthorized user: $current_user"
-            ((removed_count++))
+            removed_count=$((removed_count + 1))
         else
             # Try without removing home directory
             if userdel "$current_user" 2>/dev/null; then
                 log_success "Removed unauthorized user (kept home): $current_user"
-                ((removed_count++))
+                removed_count=$((removed_count + 1))
             else
                 log_error "Failed to remove user: $current_user"
             fi
@@ -257,11 +257,11 @@ remove_hidden_users() {
 
         if userdel -r "$username" 2>/dev/null; then
             log_success "Removed hidden user: $username"
-            ((removed_count++))
+            removed_count=$((removed_count + 1))
         else
             if userdel "$username" 2>/dev/null; then
                 log_success "Removed hidden user (kept home): $username"
-                ((removed_count++))
+                removed_count=$((removed_count + 1))
             else
                 log_error "Failed to remove hidden user: $username"
             fi
@@ -313,17 +313,17 @@ handle_system_users() {
             usermod -L "$username" 2>/dev/null
             usermod -s /usr/sbin/nologin "$username" 2>/dev/null
             log_success "Disabled login for system user: $username"
-            ((restricted_count++))
+            restricted_count=$((restricted_count + 1))
         else
             # Not a critical system account and not authorized - remove it
             log_warn "Removing unauthorized user: $username"
             if userdel -r "$username" 2>/dev/null; then
                 log_success "Removed user: $username"
-                ((restricted_count++))
+                restricted_count=$((restricted_count + 1))
             else
                 if userdel "$username" 2>/dev/null; then
                     log_success "Removed user (kept home): $username"
-                    ((restricted_count++))
+                    restricted_count=$((restricted_count + 1))
                 else
                     log_error "Failed to remove user: $username"
                 fi
@@ -457,7 +457,7 @@ create_groups() {
             log_info "Creating group: $groupname"
             if groupadd "$groupname" 2>/dev/null; then
                 log_success "Created group: $groupname"
-                ((created_count++))
+                created_count=$((created_count + 1))
             else
                 log_error "Failed to create group: $groupname"
             fi
@@ -519,7 +519,7 @@ create_missing_users() {
             passwd -e "$username" 2>/dev/null
 
             log_info "Set default password for $username (will be forced to change)"
-            ((created_count++))
+            created_count=$((created_count + 1))
 
             if [[ "$account_type" == "admin" ]]; then
                 for group in sudo adm; do
@@ -580,7 +580,7 @@ add_users_to_groups() {
                 log_info "Adding $username to group $groupname"
                 if usermod -aG "$groupname" "$username" 2>/dev/null; then
                     log_success "Added $username to group $groupname"
-                    ((changes_made++))
+                    changes_made=$((changes_made + 1))
                 else
                     log_error "Failed to add $username to group $groupname"
                 fi
@@ -619,7 +619,7 @@ add_users_to_groups() {
                 log_info "Adding $member to group $groupname"
                 if usermod -aG "$groupname" "$member" 2>/dev/null; then
                     log_success "Added $member to group $groupname"
-                    ((changes_made++))
+                    changes_made=$((changes_made + 1))
                 else
                     log_error "Failed to add $member to group $groupname"
                 fi
@@ -662,7 +662,7 @@ fix_null_passwords() {
                 echo "$username:$DEFAULT_PASSWORD" | chpasswd
                 passwd -e "$username" 2>/dev/null  # Force change on login
                 log_success "Set password for user: $username"
-                ((fixed_count++))
+                fixed_count=$((fixed_count + 1))
             else
                 log_warn "Skipping main user $username (don't change main user password)"
             fi
@@ -715,7 +715,7 @@ enforce_password_policies() {
         # -M: max days, -m: min days, -W: warn days
         if chage -M "$PASSWORD_MAX_DAYS" -m "$PASSWORD_MIN_DAYS" -W "$PASSWORD_WARN_DAYS" "$username" 2>/dev/null; then
             log_success "Set password aging for $username (max: $PASSWORD_MAX_DAYS, min: $PASSWORD_MIN_DAYS, warn: $PASSWORD_WARN_DAYS)"
-            ((changes_made++))
+            changes_made=$((changes_made + 1))
         else
             log_error "Failed to set password policy for $username"
         fi
@@ -811,7 +811,7 @@ disable_system_user_logins() {
         usermod -s /usr/sbin/nologin "$username" 2>/dev/null
 
         log_success "Disabled password login for: $username"
-        ((disabled_count++))
+        disabled_count=$((disabled_count + 1))
     done < <(build_system_users_to_restrict)
 
     if [[ $disabled_count -gt 0 ]]; then
@@ -852,7 +852,7 @@ ensure_system_accounts_nologin() {
         # Set shell to nologin
         if usermod -s /usr/sbin/nologin "$username" 2>/dev/null; then
             log_success "Set nologin shell for: $username"
-            ((modified_count++))
+            modified_count=$((modified_count + 1))
         else
             log_error "Failed to set nologin shell for: $username"
         fi
@@ -906,7 +906,7 @@ ensure_matching_uid_gid() {
                 log_info "Setting primary group for $username to $username (GID: $user_group_gid)"
                 if usermod -g "$username" "$username" 2>/dev/null; then
                     log_success "Updated primary group for $username to match UID"
-                    ((fixed_count++))
+                    fixed_count=$((fixed_count + 1))
                 else
                     log_error "Failed to update primary group for $username"
                 fi
@@ -921,7 +921,7 @@ ensure_matching_uid_gid() {
                         log_success "Created group $new_group with GID $uid"
                         if usermod -g "$new_group" "$username" 2>/dev/null; then
                             log_success "Updated primary group for $username to $new_group"
-                            ((fixed_count++))
+                            fixed_count=$((fixed_count + 1))
                         fi
                     else
                         log_error "Failed to create group with GID $uid"
@@ -935,7 +935,7 @@ ensure_matching_uid_gid() {
                 log_success "Created group $username with GID $uid"
                 if usermod -g "$username" "$username" 2>/dev/null; then
                     log_success "Updated primary group for $username"
-                    ((fixed_count++))
+                    fixed_count=$((fixed_count + 1))
                 fi
             else
                 log_error "Failed to create group $username with GID $uid (GID may be in use)"
@@ -982,7 +982,7 @@ verify_user_account_shells() {
                 log_info "Setting shell to /bin/bash for $username"
                 if usermod -s /bin/bash "$username" 2>/dev/null; then
                     log_success "Set shell to /bin/bash for $username"
-                    ((fixed_count++))
+                    fixed_count=$((fixed_count + 1))
                 fi
                 ;;
             *)
@@ -990,7 +990,7 @@ verify_user_account_shells() {
                 log_info "Setting shell to /bin/bash for $username"
                 if usermod -s /bin/bash "$username" 2>/dev/null; then
                     log_success "Set shell to /bin/bash for $username"
-                    ((fixed_count++))
+                    fixed_count=$((fixed_count + 1))
                 fi
                 ;;
         esac
