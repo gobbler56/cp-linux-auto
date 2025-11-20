@@ -144,7 +144,32 @@ sudo ./cp-engine.sh -c
 - Validates configuration before applying changes
 - Supports Ubuntu 24.04 and Linux Mint 21
 
-### 9. **OS Updates**
+### 9. **FTP Hardening**
+- Hardens vsftpd and ProFTPD configurations
+- Disables anonymous FTP access
+- Enforces TLS/SSL encryption
+- Configures passive mode ports
+- Sets proper file permissions on configuration files
+- Implements chroot jails for local users
+
+### 10. **Apache Hardening**
+- Comprehensive Apache2 web server hardening
+- Hides server version and OS information (ServerTokens, ServerSignature)
+- Disables HTTP TRACE method to prevent XST attacks
+- Configures secure timeouts to prevent DoS attacks
+- Implements request size limits
+- Disables directory browsing and access to sensitive files
+- Enables security headers (X-Frame-Options, X-Content-Type-Options, X-XSS-Protection)
+- Removes server information disclosure headers
+- Disables unnecessary modules (CGI, WebDAV, userdir, autoindex)
+- Hardens Apache configuration directory permissions (640 for files, 755 for directories)
+- Hardens web root permissions (www-data ownership, 750 for directories, 640 for files)
+- Protects version control directories (.git, .svn, etc.)
+- Blocks access to backup and temporary files
+- Validates configuration before applying changes
+- Supports both Ubuntu 24.04 and Linux Mint 21
+
+### 11. **OS Updates**
 - Checks kernel version and updates
 - Installs OS security patches
 - Configures automatic security updates
@@ -152,25 +177,25 @@ sudo ./cp-engine.sh -c
 - Runs full system upgrade (apt-get full-upgrade)
 - Handles all package updates and dependencies
 
-### 10. **Service Auditing**
+### 12. **Service Auditing**
 - Lists all running services
 - Ensures critical services are running
 - Identifies unnecessary/dangerous services
 - Manages service startup configuration
 
-### 11. **Local Policy**
+### 13. **Local Policy**
 - Configures sudo permissions
 - Sets secure file permissions
 - Configures audit logging (auditd)
 - Sets secure umask values
 
-### 12. **Defensive Countermeasures**
+### 14. **Defensive Countermeasures**
 - Enables and configures UFW firewall
 - Sets up fail2ban for intrusion prevention
 - Enables auditd for system auditing
 - Configures file integrity monitoring (AIDE)
 
-### 13. **OS Settings**
+### 15. **OS Settings**
 - Configures kernel security parameters (sysctl)
 - Disables unnecessary kernel modules
 - Sets up system banners
