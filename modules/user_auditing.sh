@@ -221,6 +221,82 @@ remove_unauthorized_users() {
     return 0
 }
 
+# Fix non-root users with UID 0 (root UID)
+fix_root_uid_users() {
+    log_section "Checking for Non-Root Users with UID 0"
+
+    local fixed_count=0
+
+    # Find all users with UID 0
+    while IFS=: read -r username _ uid _; do
+        [[ $uid -ne 0 ]] && continue  # Only process UID 0
+
+        # Skip the actual root user
+        if [[ "$username" == "root" ]]; then
+            log_debug "Skipping legitimate root user"
+            continue
+        fi
+
+        # Found a non-root user with UID 0 - this is a security issue
+        log_warn "Found non-root user with UID 0: $username"
+
+        # Check if user is authorized (though unlikely for UID 0)
+        auth_status=1
+        if is_user_authorized "$username" 2>/dev/null; then
+            auth_status=0
+        fi
+
+        if [[ $auth_status -eq 0 ]]; then
+            log_warn "User $username has UID 0 but is authorized in README"
+            log_info "Changing UID for $username to avoid root UID conflict"
+
+            # Find next available UID in system range (100-999)
+            local new_uid=900
+            while getent passwd "$new_uid" &>/dev/null; do
+                new_uid=$((new_uid + 1))
+                [[ $new_uid -ge 1000 ]] && break
+            done
+
+            if [[ $new_uid -lt 1000 ]]; then
+                log_info "Changing $username UID from 0 to $new_uid"
+                if usermod -u "$new_uid" "$username" 2>/dev/null; then
+                    log_success "Changed $username UID to $new_uid (was 0)"
+                    log_score 3 "Fixed non-root user with UID 0: $username"
+                    fixed_count=$((fixed_count + 1))
+                else
+                    log_error "Failed to change UID for $username"
+                fi
+            else
+                log_error "Could not find available UID for $username"
+            fi
+        else
+            # User is not authorized and has UID 0 - remove them
+            log_warn "Removing unauthorized user with UID 0: $username"
+            if userdel -r "$username" 2>/dev/null; then
+                log_success "Removed unauthorized user with UID 0: $username"
+                log_score 3 "Removed non-root user with UID 0: $username"
+                fixed_count=$((fixed_count + 1))
+            else
+                if userdel "$username" 2>/dev/null; then
+                    log_success "Removed unauthorized user with UID 0 (kept home): $username"
+                    log_score 3 "Removed non-root user with UID 0: $username"
+                    fixed_count=$((fixed_count + 1))
+                else
+                    log_error "Failed to remove user with UID 0: $username"
+                fi
+            fi
+        fi
+    done < /etc/passwd
+
+    if [[ $fixed_count -eq 0 ]]; then
+        log_info "No non-root users with UID 0 found"
+    else
+        log_success "Fixed $fixed_count user(s) with UID 0"
+    fi
+
+    return 0
+}
+
 # Remove hidden users (UID < 1000 but not system accounts)
 remove_hidden_users() {
     log_section "Checking for Hidden Users"
@@ -229,7 +305,7 @@ remove_hidden_users() {
 
     # Find users with UID < 1000 that aren't in our system accounts list
     while IFS=: read -r username _ uid _; do
-        # Skip UID 0 (root) and very high UIDs
+        # Skip UID 0 entirely - handled by fix_root_uid_users()
         [[ $uid -eq 0 ]] && continue
         [[ $uid -ge 65534 ]] && continue
         [[ $uid -ge 1000 ]] && continue
@@ -1035,6 +1111,7 @@ run_user_auditing() {
 
     # Run all auditing functions
     disable_guest_account
+    fix_root_uid_users                # Fix any non-root users with UID 0 (MUST run early)
     remove_unauthorized_users
     remove_hidden_users
     handle_system_users
