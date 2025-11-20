@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../lib/utils.sh"
 source "$SCRIPT_DIR/../lib/openrouter.sh"
 
-readonly FORENSICS_SYSTEM_PROMPT='You are a CyberPatriot Linux forensic analyst. Analyze the provided forensic question files and craft clear, concise answers that students can enter into the scoring report. When needed you may request safe, read-only shell commands to gather extra evidence, but combine them into a single consolidated request whenever possible and avoid unnecessary steps. Always respond with valid JSON in the exact format:
+readonly FORENSICS_SYSTEM_PROMPT='You are a CyberPatriot Linux forensic analyst. Analyze the provided forensic question files and craft clear, concise answers that students can enter into the scoring report. When needed you may request safe, read-only shell commands to gather extra evidence, but combine them into a single consolidated request whenever possible and avoid unnecessary steps. For finding files, use the "locate" command as the system database is already updated and available. Always respond with valid JSON in the exact format:
 {
   "answers": [
     {"number": 1, "answers": ["Answer text"], "explanation": "(optional short reasoning)", "needs_manual_review": false}
