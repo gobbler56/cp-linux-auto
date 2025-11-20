@@ -434,6 +434,17 @@ run_service_auditing() {
     # Handle hardcoded services (always stop)
     handle_always_stop_services
 
+    # Make sure README is parsed so we honor critical services
+    if [[ "${README_PARSED:-0}" -eq 0 ]]; then
+        log_warn "README not parsed, parsing now so critical services are preserved..."
+
+        if parse_readme; then
+            log_success "README parsed successfully for service auditing"
+        else
+            log_warn "Failed to parse README - proceeding without critical services list"
+        fi
+    fi
+
     # Get running services
     log_section "Analyzing Dynamic Services"
     log_info "Gathering running services..."
