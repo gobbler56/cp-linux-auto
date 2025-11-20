@@ -391,7 +391,7 @@ interactive_mode() {
         local i=1
         for module in "${MODULES[@]}"; do
             echo "  $i) $module"
-            ((i++))
+            i=$((i + 1))
         done
         echo "  a) Run all modules"
         echo "  q) Quit"
