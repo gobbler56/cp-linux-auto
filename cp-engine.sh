@@ -32,6 +32,11 @@ DESIRED_MODULE_ORDER=(
     ssh_hardening
     ftp_hardening
     postgres_hardening
+    samba_hardening
+    mysql_hardening
+    php_hardening
+    nginx_hardening
+    apache_hardening
     service_auditing
     unwanted_software
     malware
