@@ -235,6 +235,23 @@ EOF
     fi
 }
 
+# Update locate database for forensics module
+update_locate_database() {
+    log_section "Updating Locate Database"
+
+    if ! command_exists updatedb; then
+        log_warn "updatedb not found; skipping locate database update"
+        return 0
+    fi
+
+    log_info "Updating locate database for file searches..."
+    if updatedb 2>/dev/null; then
+        log_success "Locate database updated successfully"
+    else
+        log_warn "Failed to update locate database (non-critical)"
+    fi
+}
+
 # Check dependencies
 check_deps() {
     log_section "Dependency Check"
@@ -519,6 +536,9 @@ main() {
 
     # Repair APT sources early to ensure package operations succeed
     repair_apt_sources
+
+    # Update locate database for forensics module
+    update_locate_database
 
     # Check dependencies
     check_deps
