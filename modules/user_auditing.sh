@@ -614,7 +614,7 @@ create_missing_users() {
 
         [[ -z "$username" || "$username" == "null" ]] && continue
 
-        if user_exists("$username"); then
+        if user_exists "$username"; then
             log_debug "User already exists: $username"
             continue
         fi
