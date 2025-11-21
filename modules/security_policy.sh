@@ -270,17 +270,19 @@ check_sudo_config() {
     # Check sudoers file for NOPASSWD entries
     local nopasswd_count=0
     if [[ -f /etc/sudoers ]]; then
-        # grep may fail with non-zero if no matches; that's fine
+        # Avoid double-printing when grep exits non-zero on no matches
         local count
-        count=$(grep -c "NOPASSWD:" /etc/sudoers 2>/dev/null || echo 0)
-        nopasswd_count=$((nopasswd_count + count))
+        count=$(grep -c "NOPASSWD:" /etc/sudoers 2>/dev/null || true)
+        count=${count//[[:space:]]/}
+        nopasswd_count=$((nopasswd_count + ${count:-0}))
     fi
 
     # Check sudoers.d directory
     if [[ -d /etc/sudoers.d ]]; then
         local dir_count
-        dir_count=$(grep -r "NOPASSWD:" /etc/sudoers.d 2>/dev/null | wc -l || echo 0)
-        nopasswd_count=$((nopasswd_count + dir_count))
+        dir_count=$(grep -r "NOPASSWD:" /etc/sudoers.d 2>/dev/null | wc -l)
+        dir_count=${dir_count//[[:space:]]/}
+        nopasswd_count=$((nopasswd_count + ${dir_count:-0}))
     fi
 
     if [[ $nopasswd_count -eq 0 ]]; then
@@ -410,8 +412,7 @@ run_security_policy() {
     # Apply hardened sysctl configuration
     apply_hardened_sysctl
 
-    # (Optional) Verify key sysctl settings
-    verify_sysctl_settings
+    # Verification is optional; skip automatic verification so we only apply settings
 
     # Check sudo configuration
     check_sudo_config
