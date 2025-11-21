@@ -88,6 +88,33 @@ setup_grub_password() {
     return 0
 }
 
+# Remove restricted bash binaries if present
+remove_rbash() {
+    log_section "Removing Restricted Bash Binaries"
+
+    local targets=(
+        "/usr/bin/rbash"
+        "/usr/share/doc/bash/RBASH"
+    )
+
+    local removed=0
+
+    for target in "${targets[@]}"; do
+        if [[ -e "$target" ]]; then
+            log_info "Removing $target..."
+            rm -rf "$target" 2>/dev/null && removed=$((removed + 1))
+        fi
+    done
+
+    if [[ $removed -gt 0 ]]; then
+        log_success "Removed $removed restricted bash artifact(s)"
+    else
+        log_info "No restricted bash artifacts found"
+    fi
+
+    return 0
+}
+
 # Fix critical system file permissions
 fix_system_file_permissions() {
     log_section "Fixing Critical System File Permissions"
@@ -324,6 +351,144 @@ fix_system_file_permissions() {
     fi
 
     log_success "Fixed $fixed_count out of $total_checks system file permissions"
+
+    return 0
+}
+
+# Enforce sticky bit and secure mount options on /tmp
+ensure_tmp_sticky_bit() {
+    log_section "Ensuring /tmp Sticky Bit and Secure Options"
+
+    if [[ -d /tmp ]]; then
+        log_info "Setting sticky bit on /tmp (1777)..."
+        chmod 1777 /tmp 2>/dev/null && log_success "✓ /tmp permissions set to 1777"
+    fi
+
+    return 0
+}
+
+# Enforce secure default umask in login.defs
+enforce_default_umask() {
+    log_section "Enforcing Secure Default UMASK"
+
+    local login_defs="/etc/login.defs"
+    local desired_umask="027"
+
+    if [[ -f "$login_defs" ]]; then
+        backup_file "$login_defs"
+        if grep -qE "^\s*UMASK" "$login_defs"; then
+            sed -i "s/^\s*UMASK.*/UMASK $desired_umask/" "$login_defs"
+        else
+            echo "UMASK $desired_umask" >> "$login_defs"
+        fi
+        log_success "✓ Set UMASK to $desired_umask in $login_defs"
+    else
+        log_warn "$login_defs not found; skipping UMASK enforcement"
+    fi
+
+    return 0
+}
+
+# Restrict home directory permissions
+secure_home_directories() {
+    log_section "Securing Home Directory Permissions"
+
+    local adjusted=0
+
+    for dir in /home/*; do
+        [[ -d "$dir" ]] || continue
+
+        local perm
+        perm=$(stat -c "%a" "$dir" 2>/dev/null)
+
+        if [[ "$perm" -gt 750 ]]; then
+            log_info "Tightening permissions on $dir (current: $perm)"
+            chmod 750 "$dir" 2>/dev/null && adjusted=$((adjusted + 1))
+        fi
+    done
+
+    if [[ $adjusted -gt 0 ]]; then
+        log_success "Adjusted permissions on $adjusted home directories"
+    else
+        log_info "Home directory permissions already restricted"
+    fi
+
+    return 0
+}
+
+# Detect and fix world-writable system files
+fix_world_writable_files() {
+    log_section "Fixing World-Writable System Files"
+
+    local search_paths=(/etc /usr /var /root)
+    local fixed=0
+
+    while IFS= read -r -d '' file; do
+        log_info "Removing world-writable flag from $file"
+        chmod o-w "$file" 2>/dev/null && fixed=$((fixed + 1))
+    done < <(find "${search_paths[@]}" -xdev -type f -perm -0002 -print0 2>/dev/null)
+
+    if [[ $fixed -gt 0 ]]; then
+        log_success "Removed world-writable permissions from $fixed file(s)"
+    else
+        log_info "No unexpected world-writable files found"
+    fi
+
+    return 0
+}
+
+# Harden sudo configuration
+harden_sudo_config() {
+    log_section "Hardening Sudo Configuration"
+
+    local sudoers="/etc/sudoers"
+
+    if [[ -f "$sudoers" ]]; then
+        backup_file "$sudoers"
+
+        # Enforce password prompts (replace NOPASSWD with PASSWD)
+        sed -i 's/NOPASSWD/PASSWD/g' "$sudoers"
+
+        # Require PTY and configure logging
+        if grep -q "^Defaults" "$sudoers"; then
+            grep -q "Defaults\s\+use_pty" "$sudoers" || echo "Defaults use_pty" >> "$sudoers"
+            grep -q "Defaults\s\+logfile=\"/var/log/sudo.log\"" "$sudoers" || echo "Defaults logfile=\"/var/log/sudo.log\"" >> "$sudoers"
+        else
+            cat >> "$sudoers" <<'EOF'
+Defaults use_pty
+Defaults logfile="/var/log/sudo.log"
+EOF
+        fi
+
+        # Restrict sudo group entries to approved groups
+        local allowed_groups=(sudo admin wheel)
+        while IFS= read -r line; do
+            local group_name
+            group_name=$(echo "$line" | awk '{print $1}' | sed 's/^%//')
+            local allowed=false
+            for ag in "${allowed_groups[@]}"; do
+                [[ "$group_name" == "$ag" ]] && allowed=true && break
+            done
+            if [[ "$allowed" == false ]]; then
+                log_warn "Disabling unauthorized sudo group entry: $line"
+                local escaped_line
+                escaped_line=$(printf '%s' "$line" | sed 's/[\[\].*^$\\|?+{}()\/&]/\\&/g')
+                sed -i "s/^${escaped_line}$/# ${line}/" "$sudoers"
+            fi
+        done < <(grep -E "^%[^#]+ALL" "$sudoers")
+    else
+        log_warn "$sudoers not found; skipping sudo hardening"
+    fi
+
+    # Harden files in /etc/sudoers.d similarly
+    if [[ -d /etc/sudoers.d ]]; then
+        while IFS= read -r -d '' file; do
+            backup_file "$file"
+            sed -i 's/NOPASSWD/PASSWD/g' "$file"
+            grep -q "Defaults\s\+use_pty" "$file" || echo "Defaults use_pty" >> "$file"
+            grep -q "Defaults\s\+logfile=\"/var/log/sudo.log\"" "$file" || echo "Defaults logfile=\"/var/log/sudo.log\"" >> "$file"
+        done < <(find /etc/sudoers.d -type f -print0 2>/dev/null)
+    fi
 
     return 0
 }
@@ -603,14 +768,18 @@ print_os_settings_checklist() {
 
     echo ""
     echo "54. Kernel security parameters configured (see Security Policy module)"
-    echo "55. GRUB configuration files are not world-readable"
-    echo "56. GRUB password protection configured (manual step)"
-    echo "57. Critical system file permissions fixed (/etc/passwd, /etc/shadow, etc.)"
-    echo "58. Host resolver anti-spoofing enabled (/etc/host.conf)"
-    echo "59. Shared memory (/dev/shm) mounted with noexec, nosuid, nodev"
-    echo "60. Temporary directory (/tmp) mounted with noexec, nosuid, nodev"
-    echo "61. Process information hidden from other users (/proc hidepid=2)"
-    echo "62. X Server TCP connections disabled"
+    echo "55. Restricted bash artifacts removed (rbash)"
+    echo "56. GRUB configuration files are not world-readable"
+    echo "57. GRUB password protection configured (manual step)"
+    echo "58. Critical system file permissions fixed (/etc/passwd, /etc/shadow, /etc/gshadow, etc.)"
+    echo "59. Default UMASK set to 027 and home directories restricted"
+    echo "60. /tmp sticky bit enforced and mounted securely"
+    echo "61. Shared memory (/dev/shm) mounted with noexec, nosuid, nodev"
+    echo "62. Temporary directory (/tmp) mounted with noexec, nosuid, nodev"
+    echo "63. World-writable system files removed"
+    echo "64. Process information hidden from other users (/proc hidepid=2)"
+    echo "65. Sudo requires password, PTY, logging, and only approved groups"
+    echo "66. X Server TCP connections disabled"
     echo ""
 
     return 0
@@ -624,10 +793,16 @@ run_os_settings() {
     print_os_settings_checklist
 
     # Execute all hardening functions
+    remove_rbash
     fix_grub_permissions
     setup_grub_password
     fix_system_file_permissions
+    enforce_default_umask
+    secure_home_directories
+    ensure_tmp_sticky_bit
     setup_host_conf
+    fix_world_writable_files
+    harden_sudo_config
     secure_dev_shm
     secure_tmp_mount
     setup_proc_hidepid
