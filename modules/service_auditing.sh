@@ -53,48 +53,28 @@ readonly ALWAYS_STOP_SERVICES=(
     "snmp"
 )
 
-# System prompt for AI service analysis
-readonly SERVICE_ANALYSIS_PROMPT='You are a security specialist analyzing running services on a CyberPatriot competition system.
+# System prompt for AI service analysis (keep output as strict JSON with no prose)
+read -r -d '' SERVICE_ANALYSIS_PROMPT <<'EOF' || true
+You are a security specialist analyzing running services on a CyberPatriot competition system.
 
-Your task is to determine which services should be STOPPED and DISABLED based on:
-1. The list of running services on the system
-2. The critical services mentioned in the README that MUST remain running
-3. CyberPatriot security best practices
-
-Return ONLY valid JSON in this exact format:
+Decide which services should be STOPPED and DISABLED while preserving critical services. Respond **only** with valid JSON in this exact structure (no markdown fences, no extra text):
 {
   "services_to_stop": [
-    {
-      "name": "service-name",
-      "reason": "Brief explanation why this should be stopped"
-    }
+    {"name": "service-name", "reason": "Brief explanation why this should be stopped"}
   ],
   "services_to_keep": [
-    {
-      "name": "service-name",
-      "reason": "Brief explanation why this should remain running"
-    }
+    {"name": "service-name", "reason": "Brief explanation why this should remain running"}
   ]
 }
 
-Guidelines:
-- NEVER recommend stopping critical services from the README
-- NEVER recommend stopping essential system services (systemd, dbus, networkd, etc.)
-- DO recommend stopping obviously unnecessary services like:
-  - Web servers (apache2, nginx) UNLESS they are in critical services
-  - FTP servers (vsftpd, proftpd) UNLESS they are in critical services
-  - Database servers (mysql, postgresql, mongodb) UNLESS they are in critical services
-  - File sharing (samba, nfs-server) UNLESS they are in critical services
-  - Mail servers (postfix, dovecot, sendmail) UNLESS they are in critical services
-  - DNS servers (bind9, named) UNLESS they are in critical services
-  - Telnet, rsh, rlogin (always unsafe)
-  - Avahi/mDNS (usually unnecessary)
-  - SNMP (usually unnecessary)
-- Consider that SSH is typically needed for administration
-- Consider that desktop environments need display managers (gdm, lightdm, sddm)
-- Consider that network management services are essential (NetworkManager, systemd-networkd)
-- If unsure whether a service is needed, err on the side of keeping it running
-- Return ONLY the JSON object, no additional text or explanation'
+Rules:
+- Never recommend stopping critical services from the README.
+- Never recommend stopping essential system services (systemd, dbus, networkd, NetworkManager, etc.).
+- Stop obviously unnecessary or risky services unless marked critical (web/FTP/database/file-sharing/mail/DNS servers, telnet/rsh/rlogin, Avahi/mDNS, SNMP, torrent clients, Bluetooth, printing services, etc.).
+- SSH is typically needed; display managers and network managers are essential on desktops.
+- If unsure about a service, keep it running.
+- If nothing fits a list, return an empty array for that list.
+EOF
 
 # Check if a package is installed
 is_package_installed() {
