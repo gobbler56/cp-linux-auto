@@ -127,6 +127,58 @@ configure_ipv6_parity() {
     return 0
 }
 
+# Deny unnecessary and unused ports
+deny_unnecessary_ports() {
+    log_section "Denying Unnecessary Ports"
+
+    # Ports that are commonly unused on hardened systems
+    local unnecessary_ports=(
+        "21/tcp"   # FTP
+        "23/tcp"   # Telnet
+        "25/tcp"   # SMTP (server)
+        "80/tcp"   # HTTP
+        "110/tcp"  # POP3
+        "143/tcp"  # IMAP
+        "445/tcp"  # SMB
+        "3389/tcp" # RDP
+        "1900/udp" # SSDP
+    )
+
+    # Helper: check if a port is currently listening to avoid blocking active services
+    is_port_listening() {
+        local port_proto="$1"
+        local port="${port_proto%/*}"
+        local proto="${port_proto#*/}"
+
+        if command_exists ss; then
+            ss -lntu | awk -v p="$port" -v proto="$proto" '$1 == proto && $5 ~ (":" p "$") {found=1} END {exit !found}'
+        elif command_exists netstat; then
+            netstat -lntu | awk -v p="$port" -v proto="$proto" '$1 ~ proto && $4 ~ (":" p "$") {found=1} END {exit !found}'
+        else
+            log_warn "Cannot detect listening services (ss/netstat unavailable); skipping port safety checks"
+            return 0
+        fi
+    }
+
+    for port_proto in "${unnecessary_ports[@]}"; do
+        if is_port_listening "$port_proto"; then
+            log_info "Port $port_proto appears to be in use; skipping deny rule"
+            continue
+        fi
+
+        # Only add deny rule if not already present
+        if ufw status | grep -q "DENY[[:space:]]\+$port_proto"; then
+            log_info "Deny rule for $port_proto already exists"
+        else
+            log_info "Denying unused port $port_proto"
+            ufw deny "$port_proto" >/dev/null 2>&1
+        fi
+    done
+
+    log_success "Unnecessary ports reviewed and denied where safe"
+    return 0
+}
+
 # Enable and start UFW
 enable_ufw() {
     log_section "Enabling UFW Firewall"
@@ -220,6 +272,7 @@ run_defensive_countermeasures() {
         enable_ufw_logging
         configure_ipv6_parity
         configure_ssh_rate_limit
+        deny_unnecessary_ports
         enable_ufw
         verify_ufw_status
     fi
