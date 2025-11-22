@@ -443,18 +443,22 @@ harden_sudo_config() {
 
     local sudoers="/etc/sudoers"
 
-    if [[ -f "$sudoers" ]]; then
-        backup_file "$sudoers"
+    sanitize_sudoers_file() {
+        local file="$1"
+
+        [[ -f "$file" ]] || return 0
+
+        backup_file "$file"
 
         # Enforce password prompts (replace NOPASSWD with PASSWD)
-        sed -i 's/NOPASSWD/PASSWD/g' "$sudoers"
+        sed -i 's/NOPASSWD/PASSWD/g' "$file"
 
         # Require PTY and configure logging
-        if grep -q "^Defaults" "$sudoers"; then
-            grep -q "Defaults\s\+use_pty" "$sudoers" || echo "Defaults use_pty" >> "$sudoers"
-            grep -q "Defaults\s\+logfile=\"/var/log/sudo.log\"" "$sudoers" || echo "Defaults logfile=\"/var/log/sudo.log\"" >> "$sudoers"
+        if grep -q "^Defaults" "$file"; then
+            grep -q "Defaults\s\+use_pty" "$file" || echo "Defaults use_pty" >> "$file"
+            grep -q "Defaults\s\+logfile=\"/var/log/sudo.log\"" "$file" || echo "Defaults logfile=\"/var/log/sudo.log\"" >> "$file"
         else
-            cat >> "$sudoers" <<'EOF'
+            cat >> "$file" <<'EOF'
 Defaults use_pty
 Defaults logfile="/var/log/sudo.log"
 EOF
@@ -473,9 +477,24 @@ EOF
                 log_warn "Disabling unauthorized sudo group entry: $line"
                 local escaped_line
                 escaped_line=$(printf '%s' "$line" | sed 's/[\[\].*^$\\|?+{}()\/&]/\\&/g')
-                sed -i "s/^${escaped_line}$/# ${line}/" "$sudoers"
+                sed -i "s/^${escaped_line}$/# ${line}/" "$file"
             fi
-        done < <(grep -E "^%[^#]+ALL" "$sudoers")
+        done < <(grep -E "^%[^#]+ALL" "$file")
+
+        # Disable insecure user entries (non-root)
+        while IFS= read -r line; do
+            local user
+            user=$(echo "$line" | awk '{print $1}')
+            [[ "$user" == "root" ]] && continue
+            log_warn "Disabling unauthorized sudo user entry: $line"
+            local escaped_line
+            escaped_line=$(printf '%s' "$line" | sed 's/[\[\].*^$\\|?+{}()\/&]/\\&/g')
+            sed -i "s/^${escaped_line}$/# ${line}/" "$file"
+        done < <(grep -E "^[^#%].*ALL" "$file")
+    }
+
+    if [[ -f "$sudoers" ]]; then
+        sanitize_sudoers_file "$sudoers"
     else
         log_warn "$sudoers not found; skipping sudo hardening"
     fi
@@ -483,11 +502,221 @@ EOF
     # Harden files in /etc/sudoers.d similarly
     if [[ -d /etc/sudoers.d ]]; then
         while IFS= read -r -d '' file; do
-            backup_file "$file"
-            sed -i 's/NOPASSWD/PASSWD/g' "$file"
-            grep -q "Defaults\s\+use_pty" "$file" || echo "Defaults use_pty" >> "$file"
-            grep -q "Defaults\s\+logfile=\"/var/log/sudo.log\"" "$file" || echo "Defaults logfile=\"/var/log/sudo.log\"" >> "$file"
+            sanitize_sudoers_file "$file"
         done < <(find /etc/sudoers.d -type f -print0 2>/dev/null)
+    fi
+
+    return 0
+}
+
+# Configure screen timeout, locking, and power management for GNOME and Cinnamon
+configure_screen_security() {
+    log_section "Configuring Screen Timeout and Locking"
+
+    local dconf_dir="/etc/dconf/db/local.d"
+    local lock_dir="/etc/dconf/db/local.d/locks"
+    local config_file="$dconf_dir/00-cyberpatriot-screen"
+    local lock_file="$lock_dir/00-cyberpatriot-screen"
+
+    mkdir -p "$dconf_dir" "$lock_dir"
+
+    cat > "$config_file" <<'EOF'
+[org/gnome/desktop/session]
+idle-delay=uint32 300
+
+[org/gnome/desktop/screensaver]
+idle-activation-enabled=true
+lock-delay=uint32 0
+lock-enabled=true
+
+[org/gnome/settings-daemon/plugins/power]
+sleep-inactive-ac-type='suspend'
+sleep-inactive-ac-timeout=1800
+sleep-inactive-battery-type='suspend'
+sleep-inactive-battery-timeout=1200
+power-button-action='interactive'
+
+[org/cinnamon/desktop/session]
+idle-delay=uint32 300
+
+[org/cinnamon/desktop/screensaver]
+idle-activation-enabled=true
+lock-delay=uint32 0
+lock-enabled=true
+
+[org/cinnamon/settings-daemon/plugins/power]
+sleep-inactive-ac-type='suspend'
+sleep-inactive-ac-timeout=1800
+sleep-inactive-battery-type='suspend'
+sleep-inactive-battery-timeout=1200
+power-button-action='interactive'
+EOF
+
+    cat > "$lock_file" <<'EOF'
+/org/gnome/desktop/session/idle-delay
+/org/gnome/desktop/screensaver/idle-activation-enabled
+/org/gnome/desktop/screensaver/lock-delay
+/org/gnome/desktop/screensaver/lock-enabled
+/org/gnome/settings-daemon/plugins/power/sleep-inactive-ac-type
+/org/gnome/settings-daemon/plugins/power/sleep-inactive-ac-timeout
+/org/gnome/settings-daemon/plugins/power/sleep-inactive-battery-type
+/org/gnome/settings-daemon/plugins/power/sleep-inactive-battery-timeout
+/org/gnome/settings-daemon/plugins/power/power-button-action
+/org/cinnamon/desktop/session/idle-delay
+/org/cinnamon/desktop/screensaver/idle-activation-enabled
+/org/cinnamon/desktop/screensaver/lock-delay
+/org/cinnamon/desktop/screensaver/lock-enabled
+/org/cinnamon/settings-daemon/plugins/power/sleep-inactive-ac-type
+/org/cinnamon/settings-daemon/plugins/power/sleep-inactive-ac-timeout
+/org/cinnamon/settings-daemon/plugins/power/sleep-inactive-battery-type
+/org/cinnamon/settings-daemon/plugins/power/sleep-inactive-battery-timeout
+/org/cinnamon/settings-daemon/plugins/power/power-button-action
+EOF
+
+    if command_exists dconf; then
+        if dconf update 2>/dev/null; then
+            log_success "✓ Applied screen timeout, locking, and power policies (requires relogin)"
+        else
+            log_warn "Failed to run 'dconf update'; apply settings manually if needed"
+        fi
+    else
+        log_warn "dconf command not found; settings written but database not rebuilt"
+    fi
+
+    return 0
+}
+
+# Enforce GRUB signature verification and remove insecure overrides
+enforce_grub_signature_checks() {
+    log_section "Enforcing GRUB Signature Verification"
+
+    local grub_default="/etc/default/grub"
+    local grub_custom="/etc/grub.d/40_custom"
+    local updated=false
+
+    if [[ -f "$grub_default" ]]; then
+        backup_file "$grub_default"
+
+        if grep -q "^GRUB_VERIFY_SIGNATURES" "$grub_default"; then
+            sed -i 's/^GRUB_VERIFY_SIGNATURES=.*/GRUB_VERIFY_SIGNATURES=true/' "$grub_default"
+        else
+            echo 'GRUB_VERIFY_SIGNATURES=true' >> "$grub_default"
+        fi
+
+        updated=true
+        log_success "✓ Enabled GRUB signature verification in $grub_default"
+    else
+        log_warn "$grub_default not found; skipping signature verification toggle"
+    fi
+
+    if [[ -f "$grub_custom" ]]; then
+        backup_file "$grub_custom"
+        local temp_file
+        temp_file=$(mktemp)
+        local removed=false
+        while IFS= read -r line; do
+            if [[ "$line" =~ ^set\s+superusers || "$line" =~ ^password ]]; then
+                removed=true
+                continue
+            fi
+            echo "$line" >> "$temp_file"
+        done < "$grub_custom"
+
+        if ! grep -q "^set check_signatures" "$temp_file"; then
+            echo "set check_signatures=enforce" >> "$temp_file"
+        fi
+
+        cat "$temp_file" > "$grub_custom"
+        rm -f "$temp_file"
+
+        if [[ "$removed" == true ]]; then
+            log_success "✓ Removed insecure GRUB superuser entries from $grub_custom"
+        else
+            log_info "No GRUB superuser entries found in $grub_custom"
+        fi
+
+        updated=true
+    else
+        log_info "$grub_custom not present; skipping custom GRUB hardening"
+    fi
+
+    if command_exists update-grub && [[ "$updated" == true ]]; then
+        if update-grub >/dev/null 2>&1; then
+            log_success "✓ Regenerated GRUB configuration with signature enforcement"
+        else
+            log_warn "Failed to regenerate GRUB configuration; run update-grub manually"
+        fi
+    fi
+
+    return 0
+}
+
+# Remove insecure or unexpected entries from /etc/hosts
+sanitize_hosts_file() {
+    log_section "Sanitizing /etc/hosts"
+
+    local hosts_file="/etc/hosts"
+    local hostname_value
+    hostname_value=$(hostname 2>/dev/null || echo localhost)
+
+    if [[ -f "$hosts_file" ]]; then
+        backup_file "$hosts_file"
+    fi
+
+    cat > "$hosts_file" <<EOF
+127.0.0.1   localhost
+127.0.1.1   ${hostname_value} ${hostname_value}.localdomain
+::1         ip6-localhost ip6-loopback
+ff02::1     ip6-allnodes
+ff02::2     ip6-allrouters
+EOF
+
+    log_success "✓ Reset /etc/hosts to a secure default"
+
+    return 0
+}
+
+# Ensure GDM3 is not configured to run under a custom user
+reset_gdm3_user_configuration() {
+    log_section "Validating GDM3 User Configuration"
+
+    local custom_conf="/etc/gdm3/custom.conf"
+    local dropin_dir="/etc/systemd/system/gdm.service.d"
+    local sanitized=false
+
+    if [[ -f "$custom_conf" ]]; then
+        backup_file "$custom_conf"
+        if grep -q "^User=" "$custom_conf"; then
+            sed -i '/^User=/d' "$custom_conf"
+            sanitized=true
+        fi
+        if grep -q "^Group=" "$custom_conf"; then
+            sed -i '/^Group=/d' "$custom_conf"
+            sanitized=true
+        fi
+    fi
+
+    if [[ -d "$dropin_dir" ]]; then
+        while IFS= read -r -d '' file; do
+            backup_file "$file"
+            if grep -q "^User=" "$file"; then
+                sed -i '/^User=/d' "$file"
+                sanitized=true
+            fi
+            if grep -q "^Group=" "$file"; then
+                sed -i '/^Group=/d' "$file"
+                sanitized=true
+            fi
+        done < <(find "$dropin_dir" -type f -name '*.conf' -print0 2>/dev/null)
+    fi
+
+    if [[ "$sanitized" == true ]]; then
+        log_success "✓ Removed custom user/group overrides for GDM3"
+        if command_exists systemctl; then
+            systemctl daemon-reload >/dev/null 2>&1 || true
+        fi
+    else
+        log_info "No custom GDM3 user configuration found"
     fi
 
     return 0
@@ -777,9 +1006,13 @@ print_os_settings_checklist() {
     echo "61. Shared memory (/dev/shm) mounted with noexec, nosuid, nodev"
     echo "62. Temporary directory (/tmp) mounted with noexec, nosuid, nodev"
     echo "63. World-writable system files removed"
-    echo "64. Process information hidden from other users (/proc hidepid=2)"
-    echo "65. Sudo requires password, PTY, logging, and only approved groups"
-    echo "66. X Server TCP connections disabled"
+    echo "64. Screen timeout, locking, and power policies enforced (GNOME/Cinnamon)"
+    echo "65. Process information hidden from other users (/proc hidepid=2)"
+    echo "66. Sudo requires password, PTY, logging, and only approved groups"
+    echo "67. GRUB signature verification enforced and superuser overrides removed"
+    echo "68. /etc/hosts sanitized to default loopback entries"
+    echo "69. GDM3 not configured to run under a custom user"
+    echo "70. X Server TCP connections disabled"
     echo ""
 
     return 0
@@ -795,17 +1028,21 @@ run_os_settings() {
     # Execute all hardening functions
     remove_rbash
     fix_grub_permissions
+    enforce_grub_signature_checks
     setup_grub_password
     fix_system_file_permissions
+    harden_sudo_config
     enforce_default_umask
     secure_home_directories
     ensure_tmp_sticky_bit
+    sanitize_hosts_file
     setup_host_conf
     fix_world_writable_files
-    harden_sudo_config
     secure_dev_shm
     secure_tmp_mount
+    configure_screen_security
     setup_proc_hidepid
+    reset_gdm3_user_configuration
     disable_xserver_tcp
 
     log_section "OS Settings Module Complete"
